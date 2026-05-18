@@ -62,6 +62,9 @@ function computeDistances(data: QualCarData[]): number[] {
     return d;
 }
 
+type Pt = { x: number; y: number };
+type Bounds = { minX: number; maxX: number; minY: number; maxY: number };
+
 function arcLengths(pts: { x: number; y: number }[]): number[] {
     const d = [0];
     for (let i = 1; i < pts.length; i++) {
@@ -72,59 +75,80 @@ function arcLengths(pts: { x: number; y: number }[]): number[] {
     return d;
 }
 
-type Pt = { x: number; y: number };
-type Bounds = { minX: number; maxX: number; minY: number; maxY: number };
-
 /**
- * Normalize a circuit outline so colored segments cover exactly one lap.
- *
- * Two problems the backend outline can have:
- *   1. **Overshoot** – GPS data goes past S/F (date filter uses next-lap-start),
- *      adding points beyond the start → visual doubling near S/F.
- *   2. **Gap** – The outline ends slightly before S/F, so colored segments
- *      (which don't use the SVG "Z" close) leave an uncolored section.
- *
- * Fix: trim any overshoot, then append the first point to close the loop.
+ * Trim the GPS outline to exactly one lap by removing the S/F approach overlap.
+ * The outline covers lap_start → next_lap_start, so the S/F straight is
+ * traversed twice (departure at the start, approach at the end).
+ * Strategy: compare tail points (last 20%) against head points (first 15%).
+ * If a tail point is spatially close to ANY head point, it's on the same
+ * physical road and is part of the overlap.
  */
-function normalizeOutline(pts: Pt[]): Pt[] {
-    if (pts.length < 30) return pts;
-    const first = pts[0];
-    const b = computeBounds(pts);
-    const scale = Math.max(b.maxX - b.minX, b.maxY - b.minY) || 1;
+function trimToOneLap(pts: Pt[]): Pt[] {
+    const n = pts.length;
+    if (n < 30) return pts;
 
-    // ── Step 1: trim overshoot ──────────────────────────────────────
-    // In the tail (last 15%), find the point closest to the start.
-    // If there are points AFTER that minimum, they went past S/F → trim them.
-    const searchStart = Math.floor(pts.length * 0.85);
-    let minDist = Infinity;
-    let minIdx = pts.length - 1;
-    for (let i = searchStart; i < pts.length; i++) {
-        const dx = pts[i].x - first.x;
-        const dy = pts[i].y - first.y;
-        const d = Math.sqrt(dx * dx + dy * dy);
-        if (d < minDist) {
-            minDist = d;
-            minIdx = i;
+    // Average inter-point spacing → sets the proximity threshold
+    let totalLen = 0;
+    for (let i = 1; i < n; i++) {
+        const dx = pts[i].x - pts[i - 1].x;
+        const dy = pts[i].y - pts[i - 1].y;
+        totalLen += Math.sqrt(dx * dx + dy * dy);
+    }
+    const avgStep = totalLen / (n - 1);
+    const threshSq = avgStep * 10 * (avgStep * 10); // 10× spacing
+
+    const headLen = Math.ceil(n * 0.15); // first 15%
+    const searchFrom = Math.floor(n * 0.8); // search last 20%
+
+    // Walk backward from end: find contiguous block of tail points
+    // that are spatially close to any head point (= same physical road)
+    let cutIdx = n;
+    let gap = 0;
+    for (let i = n - 1; i >= searchFrom; i--) {
+        let near = false;
+        for (let j = 0; j < headLen; j++) {
+            const dx = pts[i].x - pts[j].x;
+            const dy = pts[i].y - pts[j].y;
+            if (dx * dx + dy * dy < threshSq) {
+                near = true;
+                break;
+            }
+        }
+        if (near) {
+            cutIdx = i;
+            gap = 0;
+        } else if (cutIdx < n) {
+            gap++;
+            if (gap > 3) break; // tolerate up to 3 noisy points
         }
     }
 
-    let trimmed = pts;
-    // Only trim if there ARE points after the minimum AND it's close to start
-    if (minIdx < pts.length - 1 && minDist < scale * 0.05) {
-        trimmed = pts.slice(0, minIdx + 1);
-    }
+    // Safety: must trim at least 1 point and not more than 20%
+    console.log("[trimToOneLap]", {
+        n,
+        avgStep: avgStep.toFixed(2),
+        thresh: Math.sqrt(threshSq).toFixed(2),
+        headLen,
+        searchFrom,
+        cutIdx,
+        trimmed: cutIdx < n - 1 && cutIdx >= n * 0.8,
+        tailDists: Array.from(
+            { length: Math.min(10, n - searchFrom) },
+            (_, k) => {
+                const i = n - 1 - k;
+                let minD = Infinity;
+                for (let j = 0; j < headLen; j++) {
+                    const dx = pts[i].x - pts[j].x;
+                    const dy = pts[i].y - pts[j].y;
+                    minD = Math.min(minD, Math.sqrt(dx * dx + dy * dy));
+                }
+                return `[${i}]=${minD.toFixed(1)}`;
+            },
+        ),
+    });
+    if (cutIdx >= n - 1 || cutIdx < n * 0.8) return pts;
 
-    // ── Step 2: close the loop ──────────────────────────────────────
-    // Append the first point so the arc covers the full circuit.
-    // If the outline already ends at the start (near-zero gap), skip.
-    const last = trimmed[trimmed.length - 1];
-    const gapDx = last.x - first.x;
-    const gapDy = last.y - first.y;
-    const gap = Math.sqrt(gapDx * gapDx + gapDy * gapDy);
-    if (gap > scale * 0.002) {
-        return [...trimmed, { x: first.x, y: first.y }];
-    }
-    return trimmed;
+    return [...pts.slice(0, cutIdx), { x: pts[0].x, y: pts[0].y }];
 }
 
 function computeBounds(pts: Pt[]): Bounds {
@@ -509,12 +533,20 @@ export default function MiniSectorMap({
     const trackSegments = useMemo(() => {
         if (!trackData?.outline.length || !miniSectorData) return null;
 
-        const outline = normalizeOutline(trackData.outline);
+        const outline = trimToOneLap(trackData.outline);
         const bounds = computeBounds(outline);
         const arcs = arcLengths(outline);
         const totalArc = arcs[arcs.length - 1];
+        const canvasPts = outline.map((p: Pt) => toCanvas(p.x, p.y, bounds));
 
-        const canvasPts = outline.map((p) => toCanvas(p.x, p.y, bounds));
+        // Closed path string for gray underlay
+        const closedPath =
+            canvasPts
+                .map(
+                    (p, idx) =>
+                        `${idx === 0 ? "M" : "L"}${p.px.toFixed(1)},${p.py.toFixed(1)}`,
+                )
+                .join(" ") + " Z";
 
         function interpAtArc(targetArc: number): { px: number; py: number } {
             if (targetArc <= arcs[0]) return canvasPts[0];
@@ -538,7 +570,6 @@ export default function MiniSectorMap({
             return canvasPts[canvasPts.length - 1];
         }
 
-        /** Compute the unit tangent direction at a given arc position */
         function tangentAtArc(targetArc: number): { dx: number; dy: number } {
             for (let j = 1; j < arcs.length; j++) {
                 if (arcs[j] >= targetArc) {
@@ -555,19 +586,13 @@ export default function MiniSectorMap({
             return { dx: dx / len, dy: dy / len };
         }
 
-        // Build colored segments — color (possibly lightened for pinstripe) from activeResults
+        // Split outline into NUM_MINI coloured sub-path segments
         const segments: {
             points: { px: number; py: number }[];
             color: string;
             pinstripe: boolean;
         }[] = [];
 
-        // Pre-compute all boundary points once so adjacent segments share
-        // exactly the same interpolated coordinate — no duplicate drawing at S/F.
-        // We deliberately do NOT snap any boundary to canvasPts[0]: arc=0 and
-        // arc=totalArc are both interpolated via interpAtArc so they return the
-        // same value, preventing the double-stroke that occurred when one segment
-        // used canvasPts[0] and the other used interpAtArc of a nearby arc value.
         const boundaryPts: { px: number; py: number }[] = [];
         for (let i = 0; i <= NUM_MINI; i++) {
             boundaryPts.push(interpAtArc((i / NUM_MINI) * totalArc));
@@ -578,19 +603,14 @@ export default function MiniSectorMap({
             const arcEnd = ((i + 1) / NUM_MINI) * totalArc;
             const baseColor = activeResults[i]?.color ?? "#333";
             const pinstripe = activeResults[i]?.pinstripe ?? false;
-            // Secondary teammate gets a noticeably lighter tint of the same hue
             const color = pinstripe ? teammateVariant(baseColor) : baseColor;
 
-            // Start from the pre-computed boundary so it matches the previous
-            // segment's end point exactly (shared reference, no floating-point gap).
             const segPts: { px: number; py: number }[] = [boundaryPts[i]];
-
             for (let j = 0; j < outline.length; j++) {
                 if (arcs[j] > arcStart && arcs[j] < arcEnd) {
                     segPts.push(canvasPts[j]);
                 }
             }
-
             segPts.push(boundaryPts[i + 1]);
 
             segments.push({ points: segPts, color, pinstripe });
@@ -602,11 +622,9 @@ export default function MiniSectorMap({
             return { pt: interpAtArc(arc), tan: tangentAtArc(arc) };
         });
 
-        // Start/finish marker at arc=0
         const sfPt = canvasPts[0];
         const sfTan = tangentAtArc(totalArc * 0.005);
 
-        // Direction arrow at ~12% around the track
         const arrowArc = totalArc * 0.12;
         const arrowPt = interpAtArc(arrowArc);
         const arrowTan = tangentAtArc(arrowArc);
@@ -614,6 +632,7 @@ export default function MiniSectorMap({
         return {
             segments,
             bounds,
+            closedPath,
             sectorBoundaries,
             sfPt,
             sfTan,
@@ -725,50 +744,24 @@ export default function MiniSectorMap({
                         </defs>
 
                         {/* Dark track background + gray underlay */}
-                        {trackData?.outline &&
-                            (() => {
-                                const normalized = normalizeOutline(
-                                    trackData.outline,
-                                );
-                                const bounds = computeBounds(normalized);
-                                const pts = normalized.map((p) =>
-                                    toCanvas(p.x, p.y, bounds),
-                                );
-                                const d =
-                                    pts
-                                        .map(
-                                            (p, i) =>
-                                                `${i === 0 ? "M" : "L"}${p.px.toFixed(1)},${p.py.toFixed(1)}`,
-                                        )
-                                        .join(" ") + " Z";
-                                return (
-                                    <>
-                                        {/* Outer shadow / border */}
-                                        <path
-                                            d={d}
-                                            fill="none"
-                                            stroke="#1a1a2e"
-                                            strokeWidth={TRACK_STROKE + 4}
-                                            strokeLinecap="round"
-                                            strokeLinejoin="round"
-                                        />
-                                        {/* Gray underlay — drawn with round caps so the full
-                                            track outline looks smooth. The colored minisector
-                                            segments (butt caps, exact same width) will cover
-                                            this completely, leaving only tiny joints visible
-                                            as gray dots where segments meet — which is correct
-                                            F1-style sector boundary behavior. */}
-                                        <path
-                                            d={d}
-                                            fill="none"
-                                            stroke="#2d2d44"
-                                            strokeWidth={TRACK_STROKE}
-                                            strokeLinecap="round"
-                                            strokeLinejoin="round"
-                                        />
-                                    </>
-                                );
-                            })()}
+                        <>
+                            <path
+                                d={trackSegments.closedPath}
+                                fill="none"
+                                stroke="#1a1a2e"
+                                strokeWidth={TRACK_STROKE + 4}
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                            />
+                            <path
+                                d={trackSegments.closedPath}
+                                fill="none"
+                                stroke="#2d2d44"
+                                strokeWidth={TRACK_STROKE}
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                            />
+                        </>
 
                         {/* Colored minisector segments — interactive */}
                         {trackSegments.segments.map((seg, i) => {
@@ -795,22 +788,6 @@ export default function MiniSectorMap({
                                   ? TRACK_STROKE + 2
                                   : TRACK_STROKE;
 
-                            const sharedProps = {
-                                d,
-                                fill: "none" as const,
-                                // "butt" caps end exactly at each boundary coordinate,
-                                // so adjacent segments tile cleanly with zero overlap.
-                                // "round" was the root cause of both the double-line
-                                // at S/F and the color-bleed dots at every junction.
-                                strokeLinecap: "butt" as const,
-                                strokeLinejoin: "round" as const,
-                                style: {
-                                    cursor: "pointer",
-                                    transition:
-                                        "stroke-width 0.1s, opacity 0.15s",
-                                },
-                            };
-
                             return (
                                 <g
                                     key={i}
@@ -829,7 +806,6 @@ export default function MiniSectorMap({
                                                 e.clientX,
                                                 e.clientY,
                                             );
-                                            // Build per-driver breakdown for comparison tooltip
                                             let breakdown:
                                                 | TooltipInfo["breakdown"]
                                                 | undefined;
@@ -897,11 +873,18 @@ export default function MiniSectorMap({
                                         )
                                     }
                                 >
-                                    {/* Team-colour stroke — offset laterally for pinstripe driver */}
                                     <path
-                                        {...sharedProps}
+                                        d={d}
+                                        fill="none"
                                         stroke={seg.color}
                                         strokeWidth={strokeW}
+                                        strokeLinecap="butt"
+                                        strokeLinejoin="round"
+                                        style={{
+                                            cursor: "pointer",
+                                            transition:
+                                                "stroke-width 0.1s, opacity 0.15s",
+                                        }}
                                     />
                                 </g>
                             );

@@ -156,6 +156,7 @@ export default function QualifyingAnalysis() {
 
     // ── Fetch Q segment boundaries whenever the session changes ───────────
     useEffect(() => {
+        let cancelled = false;
         setQualSegments({});
         if (!selectedSessionKey) return;
 
@@ -163,14 +164,19 @@ export default function QualifyingAnalysis() {
         fetch(`/api/sessions/${selectedSessionKey}/qualifying_segments`)
             .then((r) => r.json())
             .then((data: QSegments) => {
+                if (cancelled) return;
                 setQualSegments(data ?? {});
                 setSegmentsLoading(false);
             })
             .catch(() => {
+                if (cancelled) return;
                 // If the endpoint fails we still render — just without segment filtering.
                 setQualSegments({});
                 setSegmentsLoading(false);
             });
+        return () => {
+            cancelled = true;
+        };
     }, [selectedSessionKey]);
 
     const hasSegments = Object.keys(qualSegments).length > 0;
@@ -227,13 +233,39 @@ export default function QualifyingAnalysis() {
     const laps = useMemo<QualLap[]>(() => {
         if (!allLaps?.length) return [];
         if (!segStart) return allLaps; // no segment info → show everything
-        return allLaps.filter((l) => {
-            // QualLap must have date_start; add it to the type if missing.
+
+        const segLaps = allLaps.filter((l) => {
             const d = (l as QualLap & { date_start?: string }).date_start ?? "";
             if (!d) return false;
-            return d >= segStart && (!segEnd || d <= segEnd);
+            return d >= segStart && (!segEnd || d < segEnd);
         });
-    }, [allLaps, segStart, segEnd]);
+
+        // Enforce F1 qualifying structure: Q3 has max 10 drivers, Q2 has 15.
+        // This prevents boundary imprecision from leaking Q2 drivers into Q3.
+        const maxDrivers: Record<QSession, number> = { Q1: 99, Q2: 15, Q3: 10 };
+        const cap = maxDrivers[effectiveQSession];
+
+        // Find top N drivers by best lap time within the segment
+        const bestByDriver = new Map<number, number>();
+        for (const lap of segLaps) {
+            if (!lap.lap_duration || lap.is_pit_out_lap) continue;
+            const prev = bestByDriver.get(lap.driver_number);
+            if (prev === undefined || lap.lap_duration < prev) {
+                bestByDriver.set(lap.driver_number, lap.lap_duration);
+            }
+        }
+
+        if (bestByDriver.size <= cap) return segLaps;
+
+        // Keep only laps from the top N drivers
+        const topDrivers = new Set(
+            [...bestByDriver.entries()]
+                .sort((a, b) => a[1] - b[1])
+                .slice(0, cap)
+                .map(([dn]) => dn),
+        );
+        return segLaps.filter((l) => topDrivers.has(l.driver_number));
+    }, [allLaps, segStart, segEnd, effectiveQSession]);
 
     // ── Car telemetry scoped to the active Q segment ──────────────────────
     const [carDataMap, setCarDataMap] = useState<Map<number, QualCarData[]>>(
@@ -257,6 +289,7 @@ export default function QualifyingAnalysis() {
     // Uses the batch endpoint — one request instead of 20 parallel ones —
     // so the backend can pace OpenF1 calls and avoid 429 rate limits.
     useEffect(() => {
+        let cancelled = false;
         setCarDataMap(new Map());
         setCarDataError(null);
         if (!selectedSessionKey || !uniqueDrivers.length) return;
@@ -272,6 +305,7 @@ export default function QualifyingAnalysis() {
             .then(async (resp) => {
                 if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
                 const json: Record<string, QualCarData[]> = await resp.json();
+                if (cancelled) return;
                 const map = new Map<number, QualCarData[]>();
                 for (const [dn, pts] of Object.entries(json)) {
                     if (pts.length) map.set(Number(dn), pts);
@@ -282,13 +316,34 @@ export default function QualifyingAnalysis() {
                     setCarDataError("No telemetry returned for any driver.");
             })
             .catch((e) => {
+                if (cancelled) return;
                 console.warn("[CarData] batch fetch failed:", e);
                 setCarDataError(String(e));
                 setCarDataLoading(false);
             });
         // segStart/segEnd change whenever effectiveQSession changes, so this
         // naturally re-fetches on Q tab switch.
+        return () => {
+            cancelled = true;
+        };
     }, [selectedSessionKey, uniqueDrivers, segStart, segEnd]);
+
+    // Filter carDataMap to only include drivers present in the filtered laps.
+    // This prevents telemetry from Q2-eliminated drivers leaking into the
+    // MiniSectorMap / SpeedChart when segment boundaries are slightly imprecise.
+    const filteredCarDataMap = useMemo(() => {
+        if (!carDataMap.size || !laps.length) return carDataMap;
+        const validDrivers = new Set(
+            laps
+                .filter((l) => l.lap_duration && !l.is_pit_out_lap)
+                .map((l) => l.driver_number),
+        );
+        const filtered = new Map<number, QualCarData[]>();
+        for (const [dn, pts] of carDataMap) {
+            if (validDrivers.has(dn)) filtered.set(dn, pts);
+        }
+        return filtered;
+    }, [carDataMap, laps]);
 
     // focusDriverInfo removed — multi-driver focus handled in child components
     const cardTitle = hasSegments

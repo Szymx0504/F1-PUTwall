@@ -123,25 +123,62 @@ async def session_detail(session_key: int):
 
 @app.get("/api/sessions/{session_key}/qualifying_segments")
 async def qualifying_segments(session_key: int):
+    import re
+
     rc = await get_race_control(session_key)
 
-    # Find every "Started" message, sorted chronologically.
-    # OpenF1 uses message text like "Q1 STARTED", "Q2 STARTED", "Q3 STARTED".
-    started = sorted(
-        [r for r in rc if "started" in (r.get("message") or "").lower()],
-        key=lambda r: r.get("date", ""),
-    )
+    # ── Strategy: match messages that explicitly reference Q1/Q2/Q3 start ──
+    # OpenF1 race_control messages may contain:
+    #   "Q1 GREEN", "Q2 GREEN", "Q3 GREEN"   (older format)
+    #   "Q1 STARTED", "Q2 STARTED", "Q3 STARTED"
+    # We look for messages where the text matches "Q<n>" combined with a start
+    # indicator.  If a session restarts after a red flag we take the LAST start
+    # for that segment (drivers' final laps are what matters for results).
 
-    if not started:
-        print(f"[qualifying_segments] No 'Started' events found for session {session_key}. "
-              f"RC message sample: {[r.get('message') for r in rc[:10]]}")
-        return {}
+    q_pattern = re.compile(r"\bQ([1-3])\b", re.IGNORECASE)
+    start_keywords = {"started", "green"}
+
+    # Map: "Q1"/"Q2"/"Q3" → last matching event (chronologically)
+    q_starts: dict[str, dict] = {}
+
+    # Sort all RC messages chronologically
+    rc_sorted = sorted(rc, key=lambda r: r.get("date", ""))
+
+    for msg in rc_sorted:
+        text = (msg.get("message") or "").lower()
+        m = q_pattern.search(text)
+        if not m:
+            continue
+        # Check that the message also contains a start indicator
+        if not any(kw in text for kw in start_keywords):
+            continue
+        label = f"Q{m.group(1)}"
+        # Use the LAST start for each segment (handles red-flag restarts)
+        q_starts[label] = msg
+
+    if not q_starts:
+        # Fallback: try any message containing "started", assigned positionally
+        started = [r for r in rc_sorted if "started" in (r.get("message") or "").lower()]
+        if not started:
+            print(f"[qualifying_segments] No Q start events found for session {session_key}. "
+                  f"RC message sample: {[r.get('message') for r in rc[:10]]}")
+            return {}
+        # Assign positionally only as last resort
+        labels = ["Q1", "Q2", "Q3"]
+        for i, ev in enumerate(started[:3]):
+            q_starts[labels[i]] = ev
+
+    # Build segment boundaries: each segment starts at its own "started" event
+    # and ends at the next segment's start (or None for the last segment).
+    ordered_labels = [q for q in ["Q1", "Q2", "Q3"] if q in q_starts]
 
     segments: dict[str, dict] = {}
-    labels = ["Q1", "Q2", "Q3"]
-    for i, ev in enumerate(started[:3]):
-        end = started[i + 1]["date"] if i + 1 < len(started) else None
-        segments[labels[i]] = {"start": ev["date"], "end": end}
+    for i, label in enumerate(ordered_labels):
+        start_date = q_starts[label]["date"]
+        # End is the start of the NEXT segment (not the next "started" msg)
+        next_label = ordered_labels[i + 1] if i + 1 < len(ordered_labels) else None
+        end_date = q_starts[next_label]["date"] if next_label else None
+        segments[label] = {"start": start_date, "end": end_date}
 
     print(
         f"[qualifying_segments] session {session_key}: {list(segments.keys())}")
@@ -391,7 +428,7 @@ async def laps(
     if date_after:
         data = [l for l in data if (l.get("date_start") or "") >= date_after]
     if date_before:
-        data = [l for l in data if (l.get("date_start") or "") <= date_before]
+        data = [l for l in data if (l.get("date_start") or "") < date_before]
     return data
 
 
@@ -441,7 +478,7 @@ async def car_data_best_laps_batch(
             dn_laps = [
                 l for l in dn_laps
                 if (not date_after or (l.get("date_start") or "") >= date_after)
-                and (not date_before or (l.get("date_start") or "") <= date_before)
+                and (not date_before or (l.get("date_start") or "") < date_before)
             ]
         if any(l.get("lap_duration") and not l.get("is_pit_out_lap") for l in dn_laps):
             drivers_with_laps.append(dn)
@@ -511,7 +548,7 @@ async def _best_lap_telemetry(
         seg_laps = [
             l for l in all_laps
             if (not date_after or (l.get("date_start") or "") >= date_after)
-            and (not date_before or (l.get("date_start") or "") <= date_before)
+            and (not date_before or (l.get("date_start") or "") < date_before)
         ]
         if seg_laps:
             candidate_laps = seg_laps
