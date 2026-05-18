@@ -409,12 +409,18 @@ async def get_location(session_key: int, driver_number: int | None = None) -> li
 # ─── Processed Track Map ─────────────────────────────────────────────
 
 
+# Bump this whenever the outline algorithm changes so old cached entries
+# get automatically invalidated and regenerated.
+TRACK_MAP_VERSION = 2
+
+
 async def get_processed_track_map(session_key: int) -> dict:
     """
     Fetch and downsample location data for all drivers in a session.
-    This mimics the logic previously in main.py but allows it to be
-    called during seeding or as a fallback.
+    Builds a clean single-lap outline from the fastest valid flying lap.
     """
+    from datetime import datetime, timedelta
+
     drivers_list = await get_drivers(session_key)
     if not drivers_list:
         return {"outline": [], "drivers": {}}
@@ -431,44 +437,117 @@ async def get_processed_track_map(session_key: int) -> dict:
 
     results = await asyncio.gather(*(fetch_one(dn) for dn in driver_numbers))
 
-    outline: list[dict] = []
-    # Use str keys for JSON consistency
-    drivers_data: dict[str, list[dict]] = {}
-
+    # Collect and sort location data per driver
+    driver_locations: dict[int, list[dict]] = {}
     for dn, raw in results:
         if not raw:
             continue
-
         raw.sort(key=lambda p: p.get("date", ""))
+        driver_locations[dn] = raw
 
-        if not outline:
+    outline: list[dict] = []
+    drivers_data: dict[str, list[dict]] = {}
+
+    # ── Strategy 1: Use the fastest valid flying lap across all drivers ──
+    if driver_locations:
+        try:
+            all_laps = await get_laps(session_key)
+            # Find valid flying laps from drivers that have location data
+            valid_laps = [
+                l for l in all_laps
+                if l.get("lap_duration")
+                and not l.get("is_pit_out_lap")
+                and l.get("date_start")
+                and l.get("driver_number") in driver_locations
+            ]
+            if valid_laps:
+                # Sort by lap_duration, try up to 5 fastest laps
+                valid_laps.sort(key=lambda l: l["lap_duration"])
+                for best_lap in valid_laps[:5]:
+                    dn = best_lap["driver_number"]
+                    lap_num = best_lap["lap_number"]
+                    t0 = best_lap["date_start"]
+
+                    # Determine end of lap window
+                    next_lap = next(
+                        (l for l in all_laps
+                         if l.get("driver_number") == dn
+                         and l.get("lap_number") == lap_num + 1
+                         and l.get("date_start")),
+                        None,
+                    )
+                    if next_lap:
+                        t1 = next_lap["date_start"]
+                    else:
+                        try:
+                            t0_dt = datetime.fromisoformat(t0)
+                            t1_dt = t0_dt + timedelta(
+                                seconds=float(best_lap["lap_duration"]) + 2)
+                            t1 = t1_dt.isoformat()
+                        except Exception:
+                            continue
+
+                    raw = driver_locations[dn]
+                    candidate = [
+                        {"x": p["x"], "y": p["y"]}
+                        for p in raw
+                        if t0 <= p.get("date", "") <= t1
+                        and p.get("x") is not None
+                    ]
+                    if len(candidate) > 20:
+                        outline = candidate
+                        print(f"[track_map] Outline from driver {dn} "
+                              f"lap {lap_num} ({len(candidate)} pts)")
+                        break
+        except Exception as e:
+            print(f"[track_map] Strategy 1 (best lap) failed: {e}")
+
+    # ── Strategy 2: Try specific lap pairs for each driver ──
+    if not outline:
+        for dn, raw in driver_locations.items():
             try:
                 dn_laps = await get_laps(session_key, dn)
                 for try_lap in [3, 2, 4, 5, 1]:
                     lap_s = next(
-                        (l for l in dn_laps if l.get("lap_number") == try_lap), None)
+                        (l for l in dn_laps if l.get("lap_number") == try_lap),
+                        None)
                     lap_e = next(
-                        (l for l in dn_laps if l.get("lap_number") == try_lap + 1), None)
-                    if lap_s and lap_e:
+                        (l for l in dn_laps if l.get("lap_number") == try_lap + 1),
+                        None)
+                    if (lap_s and lap_e
+                            and lap_s.get("date_start") and lap_e.get("date_start")):
                         t0, t1 = lap_s["date_start"], lap_e["date_start"]
                         candidate = [
                             {"x": p["x"], "y": p["y"]}
                             for p in raw
-                            if t0 <= p.get("date", "") <= t1 and p.get("x") is not None
+                            if t0 <= p.get("date", "") <= t1
+                            and p.get("x") is not None
                         ]
                         if len(candidate) > 20:
                             outline = candidate
+                            print(f"[track_map] Outline from driver {dn} "
+                                  f"lap pair {try_lap}->{try_lap+1} "
+                                  f"({len(candidate)} pts)")
                             break
             except Exception:
                 pass
-            if not outline:
-                step = max(1, len(raw) // 2000)
-                outline = [
-                    {"x": p["x"], "y": p["y"]}
-                    for p in raw[::step]
-                    if p.get("x") is not None
-                ]
+            if outline:
+                break
 
+    # ── Strategy 3 (last resort): Downsample full session data ──
+    if not outline and driver_locations:
+        first_raw = next(iter(driver_locations.values()))
+        step = max(1, len(first_raw) // 2000)
+        outline = [
+            {"x": p["x"], "y": p["y"]}
+            for p in first_raw[::step]
+            if p.get("x") is not None
+        ]
+        print(f"[track_map] Outline from full-session fallback "
+              f"({len(outline)} pts)")
+
+    # ── Build per-driver downsampled location data ──
+    for dn, raw in driver_locations.items():
         step = max(1, len(raw) // DRIVER_TARGET)
         drivers_data[str(dn)] = [
             {"x": p["x"], "y": p["y"], "date": p["date"]}
@@ -476,7 +555,11 @@ async def get_processed_track_map(session_key: int) -> dict:
             if p.get("x") is not None
         ]
 
-    return {"outline": outline, "drivers": drivers_data}
+    return {
+        "outline": outline,
+        "drivers": drivers_data,
+        "_version": TRACK_MAP_VERSION,
+    }
 
 
 # ─── Driver lookup (cross-session) ───────────────────────────────────

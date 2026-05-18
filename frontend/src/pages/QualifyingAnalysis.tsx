@@ -10,6 +10,7 @@ import MiniSectorMap from "../components/charts/MiniSectorMap";
 import SpeedChart from "../components/charts/SpeedChart";
 import EngineChart from "../components/charts/EngineChart";
 import PedalChart from "../components/charts/PedalChart";
+import ErrorBoundary from "../components/ErrorBoundary";
 
 // One entry per race weekend — a single qualifying session_key covers all
 // three Q segments (we split them via race_control "Started" events, not
@@ -590,26 +591,30 @@ export default function QualifyingAnalysis() {
                                     Failed to load laps: {String(lapsError)}
                                 </p>
                             ) : (
-                                <QualifyingTable
-                                    drivers={uniqueDrivers}
-                                    laps={laps}
-                                    stints={stints ?? []}
-                                    qSession={effectiveQSession}
-                                    focusDrivers={focusDrivers}
-                                    onFocusDrivers={setFocusDrivers}
-                                />
+                                <ErrorBoundary label="Qualifying table">
+                                    <QualifyingTable
+                                        drivers={uniqueDrivers}
+                                        laps={laps}
+                                        stints={stints ?? []}
+                                        qSession={effectiveQSession}
+                                        focusDrivers={focusDrivers}
+                                        onFocusDrivers={setFocusDrivers}
+                                    />
+                                </ErrorBoundary>
                             )}
                         </Card>
 
                         <Card title="Mini-Sector Fastest">
-                            <MiniSectorMap
-                                drivers={uniqueDrivers}
-                                laps={laps}
-                                carDataMap={carDataMap}
-                                sessionKey={selectedSessionKey!}
-                                focusDrivers={focusDrivers}
-                                onFocusDrivers={setFocusDrivers}
-                            />
+                            <ErrorBoundary label="Mini-sector map">
+                                <MiniSectorMap
+                                    drivers={uniqueDrivers}
+                                    laps={laps}
+                                    carDataMap={filteredCarDataMap}
+                                    sessionKey={selectedSessionKey!}
+                                    focusDrivers={focusDrivers}
+                                    onFocusDrivers={setFocusDrivers}
+                                />
+                            </ErrorBoundary>
                         </Card>
                     </div>
 
@@ -623,11 +628,13 @@ export default function QualifyingAnalysis() {
                                 {carDataError}
                             </p>
                         ) : (
-                            <SpeedChart
-                                drivers={uniqueDrivers}
-                                laps={laps}
-                                carDataMap={carDataMap}
-                            />
+                            <ErrorBoundary label="Speed chart">
+                                <SpeedChart
+                                    drivers={uniqueDrivers}
+                                    laps={laps}
+                                    carDataMap={filteredCarDataMap}
+                                />
+                            </ErrorBoundary>
                         )}
                     </Card>
                     <Card title="Engine — RPM (line) + Gear (stepped)">
@@ -640,11 +647,13 @@ export default function QualifyingAnalysis() {
                                 {carDataError}
                             </p>
                         ) : (
-                            <EngineChart
-                                drivers={uniqueDrivers}
-                                laps={laps}
-                                carDataMap={carDataMap}
-                            />
+                            <ErrorBoundary label="Engine chart">
+                                <EngineChart
+                                    drivers={uniqueDrivers}
+                                    laps={laps}
+                                    carDataMap={filteredCarDataMap}
+                                />
+                            </ErrorBoundary>
                         )}
                     </Card>
                     <Card title="Pedal Trace — Throttle / Brake">
@@ -657,11 +666,13 @@ export default function QualifyingAnalysis() {
                                 {carDataError}
                             </p>
                         ) : (
-                            <PedalChart
-                                drivers={uniqueDrivers}
-                                laps={laps}
-                                carDataMap={carDataMap}
-                            />
+                            <ErrorBoundary label="Pedal chart">
+                                <PedalChart
+                                    drivers={uniqueDrivers}
+                                    laps={laps}
+                                    carDataMap={filteredCarDataMap}
+                                />
+                            </ErrorBoundary>
                         )}
                     </Card>
                 </div>

@@ -531,9 +531,15 @@ export default function MiniSectorMap({
     /* ── Track outline split into minisector segments for SVG ────────── */
 
     const trackSegments = useMemo(() => {
-        if (!trackData?.outline.length || !miniSectorData) return null;
+        if (!trackData?.outline?.length || !miniSectorData) return null;
 
-        const outline = trimToOneLap(trackData.outline);
+        // Filter out any points with null/undefined coordinates
+        const validOutline = trackData.outline.filter(
+            (p) => p.x != null && p.y != null && isFinite(p.x) && isFinite(p.y),
+        );
+        if (validOutline.length < 10) return null;
+
+        const outline = trimToOneLap(validOutline);
         const bounds = computeBounds(outline);
         const arcs = arcLengths(outline);
         const totalArc = arcs[arcs.length - 1];

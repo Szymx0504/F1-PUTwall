@@ -654,18 +654,31 @@ async def location(session_key: int, driver_number: int | None = None):
 
 
 @app.get("/api/sessions/{session_key}/track_map")
-async def track_map(session_key: int):
+async def track_map(
+    session_key: int,
+    refresh: bool = Query(False, description="Force re-compute ignoring cache"),
+):
     """Return downsampled location data for every driver."""
-    # Check DB cache first
-    cached_data = await db.get_track_map(session_key)
-    if cached_data:
-        print(f"[track_map] Cache hit for session {session_key}")
-        return cached_data
+    from openf1_client import get_processed_track_map, TRACK_MAP_VERSION
 
-    print(f"[track_map] Cache miss for session {session_key}, computing...")
+    # Check DB cache first (skip if refresh requested)
+    if not refresh:
+        cached_data = await db.get_track_map(session_key)
+        if cached_data:
+            cached_version = cached_data.get("_version", 0)
+            if cached_version >= TRACK_MAP_VERSION:
+                print(f"[track_map] Cache hit (v{cached_version}) for session {session_key}")
+                return cached_data
+            print(f"[track_map] Cache stale (v{cached_version} < v{TRACK_MAP_VERSION}) "
+                  f"for session {session_key}, regenerating...")
 
-    from openf1_client import get_processed_track_map
-    result_data = await get_processed_track_map(session_key)
+    print(f"[track_map] {'Refresh' if refresh else 'Computing'} for session {session_key}...")
+
+    try:
+        result_data = await get_processed_track_map(session_key)
+    except Exception as e:
+        print(f"[track_map] Failed to compute track map for session {session_key}: {e}")
+        return {"outline": [], "drivers": {}, "_version": TRACK_MAP_VERSION}
 
     # Store in DB cache
     try:
