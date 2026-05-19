@@ -2,8 +2,10 @@
   <img src="frontend/public/F1_PUTwall_black.PNG" alt="F1 PUTwall Logo" width="400"/>
 </p>
 
-
 # F1 PUTwall
+
+[![Frontend](https://github.com/Szymx0504/F1-PUTwall/actions/workflows/frontend.yml/badge.svg)](https://github.com/Szymx0504/F1-PUTwall/actions/workflows/frontend.yml)
+[![Backend](https://github.com/Szymx0504/F1-PUTwall/actions/workflows/backend.yml/badge.svg)](https://github.com/Szymx0504/F1-PUTwall/actions/workflows/backend.yml)
 
 Interactive F1 race data dashboard — replay races lap-by-lap, analyze driver performance, and explore season stats.
 
@@ -39,7 +41,9 @@ Runs on http://localhost:5173 (proxies API requests to backend)
 ## Features
 
 ### Race Replay Page
+
 Replay races lap-by-lap with the following visualizations:
+
 - **Position chart** — positions of each driver throughout the race
 - **Race Event Feed** — all events that occurred during the race
 - **Race Map** — live map with drivers moving around the circuit
@@ -49,14 +53,18 @@ Replay races lap-by-lap with the following visualizations:
 - **Weather conditions** — live weather info during the race
 
 ### Season Overview Page
+
 Explore season-level statistics:
+
 - **Driver and Constructor championship table** — standings after the chosen race
 - **Points** — points awarded for the chosen race
 - **Points throughout the season** — cumulative points up to the chosen race
 - **Season results grid** — finishing position of each driver in each race
 
 ### Qualifying Page
+
 Analyze qualifying session data:
+
 - **Q1/Q2/Q3 results table** — full qualifying results
 - **Mini sector fastest map** — fastest mini sectors across the lap
 - **Speed line chart** — driver speeds across the lap
@@ -64,6 +72,7 @@ Analyze qualifying session data:
 - **Throttle/Brake chart** — throttle and brake percentages over the lap
 
 ### Additional Features
+
 - **Live Data** — real-time race data via WebSocket streaming
 
 ## Data Source
