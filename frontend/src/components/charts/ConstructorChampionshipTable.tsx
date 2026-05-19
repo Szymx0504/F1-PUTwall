@@ -39,20 +39,16 @@ export default function ConstructorChampionshipTable({
             const teamColors = new Map<string, string>();
             allDrivers.forEach((driver) => {
                 if (driver.team_name && driver.team_colour) {
-                    teamColors.set(
-                        driver.team_name,
-                        `#${driver.team_colour}`,
-                    );
+                    teamColors.set(driver.team_name, `#${driver.team_colour}`);
                 }
             });
             return standings
                 .map((entry) => {
                     // Prefer color sent directly by the enriched backend response;
                     // fall back to allDrivers lookup for backwards compatibility.
-                    const color =
-                        (entry as any).team_colour
-                            ? `#${(entry as any).team_colour}`
-                            : (teamColors.get(entry.team_name) ?? "#ffffff");
+                    const color = entry.team_colour
+                        ? `#${entry.team_colour}`
+                        : (teamColors.get(entry.team_name) ?? "#ffffff");
                     return {
                         name: entry.team_name,
                         points: entry.points_current ?? entry.points_start ?? 0,
@@ -85,7 +81,7 @@ export default function ConstructorChampionshipTable({
         const teamPoints = new Map<string, { points: number; color: string }>();
         allDrivers.forEach((d) => {
             const driverPoints = points.get(d.driver_number) ?? 0;
-            const teamName = (d as any).team_name ?? "";
+            const teamName = d.team_name ?? "";
             const existing = teamPoints.get(teamName);
             if (existing) {
                 existing.points += driverPoints;

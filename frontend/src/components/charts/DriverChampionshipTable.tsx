@@ -32,10 +32,9 @@ function getDriverLabel(
         driver?.full_name || driver?.broadcast_name || driver?.name_acronym;
     // Backend now enriches entries with full_name / name_acronym / broadcast_name
     const fromEntry =
-        (entry as any).full_name ||
-        (entry as any).broadcast_name ||
-        (entry as any).name_acronym ||
         entry.full_name ||
+        entry.broadcast_name ||
+        entry.name_acronym ||
         entry.name;
     return byDriver || fromEntry || null;
 }
@@ -70,16 +69,10 @@ export default function DriverChampionshipTable({
                         surname, // null → render number only, no duplication
                         // Backend enriches entries with team_name and team_colour;
                         // fall back to allDrivers lookup for backwards compatibility.
-                        teamName:
-                            (entry as any).team_name ??
-                            driver?.team_name ??
-                            entry.team_name ??
-                            "",
+                        teamName: entry.team_name ?? driver?.team_name ?? "",
                         points: entry.points_current ?? entry.points_start ?? 0,
                         color: `#${
-                            (entry as any).team_colour ??
-                            driver?.team_colour ??
-                            "ffffff"
+                            entry.team_colour ?? driver?.team_colour ?? "ffffff"
                         }`,
                     };
                 })
@@ -112,7 +105,7 @@ export default function DriverChampionshipTable({
                     d.full_name?.split(" ").slice(-1)[0]?.toUpperCase() ??
                     d.name_acronym ??
                     null,
-                teamName: (d as any).team_name ?? "",
+                teamName: d.team_name ?? "",
                 points: points.get(d.driver_number) ?? 0,
                 color: `#${d.team_colour || "ffffff"}`,
             }))

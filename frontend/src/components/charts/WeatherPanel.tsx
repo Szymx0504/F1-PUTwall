@@ -19,16 +19,34 @@ interface Props {
 }
 
 // Custom tooltip for the weather chart
-function WeatherTooltip({ active, payload }: any) {
+interface WeatherTooltipEntry {
+    dataKey: string;
+    name?: string;
+    value?: number;
+    color?: string;
+    payload: { idx: number };
+}
+
+function WeatherTooltip({
+    active,
+    payload,
+}: {
+    active?: boolean;
+    payload?: WeatherTooltipEntry[];
+}) {
     if (!active || !payload?.length) return null;
     const data = payload[0].payload;
     return (
         <div className="bg-[#111214] border border-[#2d2f33] rounded-lg px-3 py-2 text-xs">
             <p className="text-f1-muted mb-1">Sample {data.idx}</p>
-            {payload.map((entry: any) => (
+            {payload.map((entry) => (
                 <p key={entry.dataKey} style={{ color: entry.color }}>
                     {entry.name}: {entry.value?.toFixed(1)}
-                    {entry.dataKey === "humidity" ? "%" : entry.dataKey === "rainfall" ? " mm" : "°C"}
+                    {entry.dataKey === "humidity"
+                        ? "%"
+                        : entry.dataKey === "rainfall"
+                          ? " mm"
+                          : "°C"}
                 </p>
             ))}
         </div>
@@ -43,13 +61,14 @@ export default function WeatherPanel({
 }: Props) {
     // Progressive data: only show up to the current lap proportion
     const tempData = useMemo(() => {
-        if (!allWeather.length || !maxLap) return allWeather.map((w, i) => ({
-            idx: i + 1,
-            air: w.air_temperature,
-            track: w.track_temperature,
-            humidity: w.humidity,
-            rainfall: w.rainfall ?? 0,
-        }));
+        if (!allWeather.length || !maxLap)
+            return allWeather.map((w, i) => ({
+                idx: i + 1,
+                air: w.air_temperature,
+                track: w.track_temperature,
+                humidity: w.humidity,
+                rainfall: w.rainfall ?? 0,
+            }));
 
         const progress = currentLap / maxLap;
         const sliceEnd = Math.max(1, Math.ceil(allWeather.length * progress));
@@ -121,7 +140,9 @@ export default function WeatherPanel({
                                     Rainfall
                                 </p>
                                 <p className="text-sm font-semibold">
-                                    {weather.rainfall ? `${weather.rainfall} mm` : "None"}
+                                    {weather.rainfall
+                                        ? `${weather.rainfall} mm`
+                                        : "None"}
                                 </p>
                             </div>
                         </div>
@@ -146,7 +167,7 @@ export default function WeatherPanel({
                                     tick={{ fontSize: 10 }}
                                     width={30}
                                     domain={[0, "auto"]}
-                                    hide={!tempData.some(d => d.rainfall > 0)}
+                                    hide={!tempData.some((d) => d.rainfall > 0)}
                                 />
                                 <Tooltip content={<WeatherTooltip />} />
                                 <Line

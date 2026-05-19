@@ -38,7 +38,7 @@ type ClassifiedStatus = "Finished" | "DNF" | "DNS" | "DSQ";
  * Priority order: DSQ > DNS > DNF > Finished.
  */
 function resolveStatus(row: SessionResultRow): ClassifiedStatus {
-    const r = row as any;
+    const r = row as { dsq?: boolean; dns?: boolean; dnf?: boolean };
     if (r.dsq === true) return "DSQ";
     if (r.dns === true) return "DNS";
     if (r.dnf === true) return "DNF";

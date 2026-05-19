@@ -74,8 +74,11 @@ export interface DriverChampionshipEntry {
     position_current?: number | null;
     position_start?: number | null;
     team_name?: string;
+    team_colour?: string;
     name?: string;
     full_name?: string;
+    broadcast_name?: string;
+    name_acronym?: string;
 }
 
 export interface ConstructorChampionshipEntry {
@@ -85,6 +88,7 @@ export interface ConstructorChampionshipEntry {
     points_start?: number | null;
     position_current?: number | null;
     position_start?: number | null;
+    team_colour?: string;
 }
 
 export interface CarData {
@@ -138,14 +142,14 @@ export interface Weather {
 }
 
 export interface RaceControlMessage {
-  date: string;
-  session_key: number;
-  category: string;
-  flag?: string;
-  message: string;
-  scope?: string;
-  driver_number?: number;
-  lap_number?: number;
+    date: string;
+    session_key: number;
+    category: string;
+    flag?: string;
+    message: string;
+    scope?: string;
+    driver_number?: number;
+    lap_number?: number;
 }
 
 export interface LocationPoint {
@@ -175,13 +179,13 @@ export interface LapFrame {
 }
 
 export interface FullRaceData {
-  type: 'full_race_data';
-  laps: Lap[];
-  positions: Position[];
-  stints: Stint[];
-  weather: Weather[];
-  intervals: Interval[];
-  raceControl: RaceControlMessage[];
+    type: "full_race_data";
+    laps: Lap[];
+    positions: Position[];
+    stints: Stint[];
+    weather: Weather[];
+    intervals: Interval[];
+    raceControl: RaceControlMessage[];
 }
 
 export interface SessionInfo {

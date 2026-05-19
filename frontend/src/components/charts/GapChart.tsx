@@ -9,6 +9,12 @@ import {
     ResponsiveContainer,
 } from "recharts";
 import type { Interval, Lap, Driver } from "../../types";
+import {
+    type ChartTooltipProps,
+    type TooltipPayloadItem,
+    tooltipDataKeyToString,
+    tooltipValueToNumber,
+} from "./chartTooltip";
 
 interface Props {
     intervals: Interval[];
@@ -25,12 +31,20 @@ const TooltipContent = ({
     label,
     focusedAcronyms,
     hasFocus,
-}: any) => {
+}: ChartTooltipProps) => {
     if (!active || !payload || !payload.length) return null;
-    const items = payload
-        .filter((p: any) => p.value != null)
-        .filter((p: any) => !hasFocus || focusedAcronyms?.has(p.dataKey))
-        .sort((a: any, b: any) => a.value - b.value)
+    const items: TooltipPayloadItem[] = payload
+        .filter((p) => p.value != null)
+        .filter((p) => {
+            if (!hasFocus) return true;
+            const key = tooltipDataKeyToString(p.dataKey);
+            return key ? !!focusedAcronyms?.has(key) : false;
+        })
+        .slice()
+        .sort(
+            (a, b) =>
+                tooltipValueToNumber(a.value) - tooltipValueToNumber(b.value),
+        )
         .slice(0, 20);
     if (!items.length) return null;
     return (
@@ -42,12 +56,17 @@ const TooltipContent = ({
                 Lap {label}
             </div>
             <div className="space-y-[3px]">
-                {items.map((item: any) => {
+                {items.map((item) => {
                     const isLeader =
                         typeof item.value === "number" && item.value < 0.001;
+                    const keyLabel =
+                        typeof item.dataKey === "string" ||
+                        typeof item.dataKey === "number"
+                            ? item.dataKey
+                            : "";
                     return (
                         <div
-                            key={item.dataKey}
+                            key={keyLabel}
                             className="flex items-center justify-between gap-4"
                         >
                             <div className="flex items-center gap-1.5">
@@ -56,7 +75,7 @@ const TooltipContent = ({
                                     style={{ backgroundColor: item.stroke }}
                                 />
                                 <span className="text-[11px] font-bold tracking-wide">
-                                    {item.dataKey}
+                                    {keyLabel}
                                 </span>
                             </div>
                             <span
@@ -90,7 +109,7 @@ function buildTeamGroups(sortedDrivers: Driver[]): TeamGroup[] {
         const key = driver.team_colour || "ffffff";
         if (!map.has(key)) {
             map.set(key, {
-                teamName: (driver as any).team_name ?? key,
+                teamName: driver.team_name ?? key,
                 teamColour: key,
                 drivers: [],
             });
@@ -244,7 +263,7 @@ export default function GapChart({
                             tickFormatter={(v) => `${v}s`}
                         />
                         <Tooltip
-                            content={(props: any) => (
+                            content={(props) => (
                                 <TooltipContent
                                     {...props}
                                     focusedAcronyms={

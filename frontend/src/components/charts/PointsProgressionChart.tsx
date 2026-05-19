@@ -138,6 +138,21 @@ function fetchReducer(_s: FetchState, a: FetchAction): FetchState {
 
 // ── Tooltip ───────────────────────────────────────────────────────────────────
 
+interface TooltipPayloadItem {
+    value: number | null;
+    dataKey: string;
+    stroke: string;
+}
+
+interface TooltipContentProps {
+    active?: boolean;
+    payload?: TooltipPayloadItem[];
+    label?: string;
+    focusedAcronyms?: Set<string>;
+    hasFocus?: boolean;
+    driverMeta?: Map<string, DriverMeta>;
+}
+
 const TooltipContent = ({
     active,
     payload,
@@ -145,12 +160,12 @@ const TooltipContent = ({
     focusedAcronyms,
     hasFocus,
     driverMeta,
-}: any) => {
+}: TooltipContentProps) => {
     if (!active || !payload?.length) return null;
     const items = payload
-        .filter((p: any) => p.value != null)
-        .filter((p: any) => !hasFocus || focusedAcronyms?.has(p.dataKey))
-        .sort((a: any, b: any) => b.value - a.value)
+        .filter((p) => p.value != null)
+        .filter((p) => !hasFocus || focusedAcronyms?.has(p.dataKey))
+        .sort((a, b) => (b.value ?? 0) - (a.value ?? 0))
         .slice(0, 20);
     if (!items.length) return null;
 
@@ -163,7 +178,7 @@ const TooltipContent = ({
                 {label}
             </div>
             <div className="space-y-[3px]">
-                {items.map((item: any) => {
+                {items.map((item) => {
                     const meta: DriverMeta | undefined = driverMeta?.get(
                         item.dataKey,
                     );
@@ -499,9 +514,15 @@ export default function PointsProgressionChart({
                             tickFormatter={(v) => String(v)}
                         />
                         <Tooltip
-                            content={(props: any) => (
+                            content={(props) => (
                                 <TooltipContent
-                                    {...props}
+                                    active={props.active}
+                                    label={props.label as string | undefined}
+                                    payload={
+                                        props.payload as unknown as
+                                            | TooltipPayloadItem[]
+                                            | undefined
+                                    }
                                     focusedAcronyms={
                                         hasFocus
                                             ? new Set(
@@ -513,7 +534,7 @@ export default function PointsProgressionChart({
                                                       )
                                                       .map((d) => d.acronym),
                                               )
-                                            : null
+                                            : undefined
                                     }
                                     hasFocus={hasFocus}
                                     driverMeta={driverMetaMap}

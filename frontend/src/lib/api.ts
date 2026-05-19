@@ -214,7 +214,9 @@ export const api = {
                         `/sessions/${sessionKey}/car_data/${num}`,
                     );
                     if (data?.length) map.set(num, data);
-                } catch {}
+                } catch {
+                    // ignore per-driver fetch failures
+                }
             }),
         );
         return map;
