@@ -1,10 +1,11 @@
 import { useMemo } from "react";
-import type { Stint, Driver, Lap } from "../../types";
+import type { Stint, Driver, Lap, Position } from "../../types";
 
 interface Props {
     stints: Stint[];
     drivers: Driver[];
     laps: Lap[]; // ALL laps (not filtered to currentLap) — needed to know max
+    positions: Position[];
     maxLap: number;
     currentLap: number;
 }
@@ -52,7 +53,7 @@ function sanitiseStints(
     rawStints: Stint[],
     driverNumber: number,
     raceTotalLaps: number,
-    driverLastLap: number, // actual last lap this driver completed (DNF cap)
+    driverLastLap: number,
 ): CleanStint[] {
     const raw = rawStints
         .filter((s) => s.driver_number === driverNumber)
@@ -125,16 +126,58 @@ export default function TireStrategy({
     stints,
     drivers,
     laps,
+    positions,
     maxLap,
     currentLap,
 }: Props) {
-    // Position order comes from the `drivers` prop, which is already sorted by
-    // current race position in the parent (RaceReplay → sortedDrivers).
+    // Compute each driver's race position as of `currentLap`. We find the
+    // driver's lap row matching `currentLap` (or the closest earlier lap for
+    // DNFs) and pick the most recent Position record at or before that lap's
+    // start time. Drivers without data fall back to a large rank so they sort
+    // last but remain in stable relative order.
     const positionMap = useMemo(() => {
         const map = new Map<number, number>();
-        drivers.forEach((d, idx) => map.set(d.driver_number, idx + 1));
+
+        // Index positions by driver, sorted chronologically
+        const positionsByDriver = new Map<number, Position[]>();
+        positions.forEach((p) => {
+            const list = positionsByDriver.get(p.driver_number) ?? [];
+            list.push(p);
+            positionsByDriver.set(p.driver_number, list);
+        });
+        positionsByDriver.forEach((list) =>
+            list.sort((a, b) => a.date.localeCompare(b.date)),
+        );
+
+        // For each driver, find the lap <= currentLap with the highest lap_number
+        const lapByDriver = new Map<number, Lap>();
+        laps.forEach((l) => {
+            if (l.lap_number > currentLap) return;
+            const prev = lapByDriver.get(l.driver_number);
+            if (!prev || l.lap_number > prev.lap_number) {
+                lapByDriver.set(l.driver_number, l);
+            }
+        });
+
+        drivers.forEach((d, idx) => {
+            const lap = lapByDriver.get(d.driver_number);
+            const driverPositions =
+                positionsByDriver.get(d.driver_number) ?? [];
+            let pos: number | null = null;
+            if (lap && driverPositions.length) {
+                const cutoff = lap.date_start;
+                for (let i = driverPositions.length - 1; i >= 0; i--) {
+                    if (driverPositions[i].date <= cutoff) {
+                        pos = driverPositions[i].position;
+                        break;
+                    }
+                }
+                if (pos == null) pos = driverPositions[0].position;
+            }
+            map.set(d.driver_number, pos ?? 100 + idx);
+        });
         return map;
-    }, [drivers]);
+    }, [drivers, positions, laps, currentLap]);
 
     // raceTotalLaps = absolute max lap in full dataset
     const raceTotalLaps = useMemo(
