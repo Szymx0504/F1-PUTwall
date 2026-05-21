@@ -141,16 +141,21 @@ function douglasPeucker(pts: Pt[], eps: number): Pt[] {
 
 /**
  * Build a track path with cumulative arc-length at each vertex.
- * The polyline is treated as OPEN: totalLen = arc length of the last
- * vertex, with no synthetic closure chord. The outline data starts at
- * S/F crossing and ends ~1 GPS interval before the next S/F crossing,
- * so the gap between outline[N-1] and outline[0] is several meters of
- * empty space — including a synthetic closure segment in the snap path
- * caused drivers near S/F to be rendered along that chord instead of
- * on the actual track. Lap wraparound is still handled correctly by
- * `toArcSamples` and the modulo in `arcToPos`.
+ *
+ * The outline data starts at the S/F crossing and ends ~1 GPS interval
+ * before the next S/F crossing, leaving a small gap (several metres)
+ * between outline[N-1] and outline[0]. We append a synthetic closure
+ * segment from outline[N-1] back to outline[0] so that arc-length
+ * mapping (`arcToPos`) wraps smoothly across S/F instead of jumping.
+ * Projection (`projectToArc`) deliberately ignores this closure segment
+ * via `openCount` so drivers near S/F never snap onto the chord across
+ * track-empty space.
  */
-function buildTrackPath(pts: Pt[]): { segs: TrackSeg[]; totalLen: number } {
+function buildTrackPath(pts: Pt[]): {
+    segs: TrackSeg[];
+    totalLen: number;
+    openCount: number;
+} {
     const segs: TrackSeg[] = [{ x: pts[0].x, y: pts[0].y, d: 0 }];
     for (let i = 1; i < pts.length; i++) {
         const dx = pts[i].x - pts[i - 1].x,
@@ -161,20 +166,26 @@ function buildTrackPath(pts: Pt[]): { segs: TrackSeg[]; totalLen: number } {
             d: segs[i - 1].d + Math.sqrt(dx * dx + dy * dy),
         });
     }
-    return { segs, totalLen: segs[segs.length - 1].d };
+    const openCount = segs.length;
+    // Virtual closure vertex: duplicate of pts[0] at d = openLen + closure chord
+    const last = segs[openCount - 1];
+    const cdx = pts[0].x - last.x,
+        cdy = pts[0].y - last.y;
+    const closureLen = Math.sqrt(cdx * cdx + cdy * cdy);
+    segs.push({ x: pts[0].x, y: pts[0].y, d: last.d + closureLen });
+    return { segs, totalLen: last.d + closureLen, openCount };
 }
 
 /**
  * Project a point onto the track and return its arc-length parameter.
- * Treats the polyline as OPEN (no closure segment from segs[N-1] back to
- * segs[0]) so drivers at S/F never project onto a chord across track-empty
- * space.
+ * Iterates only over real outline segments (`openCount - 1` of them) and
+ * never onto the synthetic closure chord, so drivers at S/F always snap
+ * to actual track geometry.
  */
-function projectToArc(pt: Pt, segs: TrackSeg[]): number {
+function projectToArc(pt: Pt, segs: TrackSeg[], openCount: number): number {
     let bestD2 = Infinity,
         bestArc = 0;
-    const n = segs.length;
-    for (let i = 0; i < n - 1; i++) {
+    for (let i = 0; i < openCount - 1; i++) {
         const a = segs[i];
         const b = segs[i + 1];
         const abx = b.x - a.x,
@@ -228,13 +239,14 @@ function toArcSamples(
     samples: Sample[],
     segs: TrackSeg[],
     totalLen: number,
+    openCount: number,
 ): ArcSample[] {
     if (!samples.length || !segs.length) return [];
     const result: ArcSample[] = [];
     let offset = 0,
         prevRaw = -1;
     for (const s of samples) {
-        const raw = projectToArc(s, segs);
+        const raw = projectToArc(s, segs, openCount);
         if (prevRaw >= 0) {
             const diff = raw - prevRaw;
             if (diff < -totalLen * 0.3) offset += totalLen;
@@ -407,26 +419,91 @@ export default function TrackMap({
         for (const [dn, samples] of parsed)
             m.set(
                 dn,
-                toArcSamples(samples, trackPath.segs, trackPath.totalLen),
+                toArcSamples(
+                    samples,
+                    trackPath.segs,
+                    trackPath.totalLen,
+                    trackPath.openCount,
+                ),
             );
         return m;
     }, [parsed, trackPath]);
 
     const lapRanges = useMemo(() => {
+        // Bucket valid date_start timestamps per lap. OpenF1 frequently
+        // omits date_start for lap 1 (the standing-start lap is timed
+        // differently) — those rows produce NaN/0 and would poison the
+        // animation, so we drop them and back-fill below using each
+        // lap's `lap_duration` so lap 1 starts at lights-out (not in
+        // the formation lap).
         const starts = new Map<number, number[]>();
+        const durations = new Map<number, number>(); // lap_number -> min duration (ms)
         for (const l of laps) {
-            const t = new Date(l.date_start).getTime();
-            starts.set(l.lap_number, [...(starts.get(l.lap_number) ?? []), t]);
+            if (l.date_start) {
+                const t = new Date(l.date_start).getTime();
+                if (Number.isFinite(t)) {
+                    starts.set(l.lap_number, [
+                        ...(starts.get(l.lap_number) ?? []),
+                        t,
+                    ]);
+                }
+            }
+            if (l.lap_duration && l.lap_duration > 0) {
+                const ms = l.lap_duration * 1000;
+                const cur = durations.get(l.lap_number);
+                if (cur == null || ms < cur) durations.set(l.lap_number, ms);
+            }
         }
-        const nums = [...starts.keys()].sort((a, b) => a - b);
+        if (!starts.size)
+            return new Map<number, { start: number; end: number }>();
+
+        // Average lap duration from known starts (used to back-fill gaps).
+        const known = [...starts.keys()].sort((a, b) => a - b);
+        const knownStarts = known.map((n) => Math.min(...starts.get(n)!));
+        let avg = 90_000;
+        if (knownStarts.length > 1) {
+            let sum = 0,
+                count = 0;
+            for (let i = 1; i < knownStarts.length; i++) {
+                const d =
+                    (knownStarts[i] - knownStarts[i - 1]) /
+                    (known[i] - known[i - 1]);
+                if (Number.isFinite(d) && d > 0) {
+                    sum += d;
+                    count++;
+                }
+            }
+            if (count) avg = sum / count;
+        }
+
+        // Cover the full lap range, walking backwards from the last
+        // known lap so each missing entry can subtract its own duration
+        // from the next lap's start.
+        const minLap = Math.min(known[0], 1);
+        const maxLap = known[known.length - 1];
         const ranges = new Map<number, { start: number; end: number }>();
-        for (let i = 0; i < nums.length; i++) {
-            const s = Math.min(...starts.get(nums[i])!);
-            const e =
-                i < nums.length - 1
-                    ? Math.min(...starts.get(nums[i + 1])!)
-                    : s + 100_000;
-            ranges.set(nums[i], { start: s, end: e });
+        for (let n = maxLap; n >= minLap; n--) {
+            if (starts.has(n)) {
+                ranges.set(n, {
+                    start: Math.min(...starts.get(n)!),
+                    end: 0,
+                });
+                continue;
+            }
+            // Back-fill: prefer lap n's own recorded lap_duration
+            // (covers lap 1's longer standing-start duration); fall
+            // back to the average racing lap duration.
+            const next = ranges.get(n + 1);
+            if (!next) continue;
+            const dur = durations.get(n) ?? avg;
+            ranges.set(n, { start: next.start - dur, end: 0 });
+        }
+        // Compute end as next lap's start (or +avg for the final lap)
+        for (let n = minLap; n <= maxLap; n++) {
+            const cur = ranges.get(n);
+            if (!cur) continue;
+            const nxt = ranges.get(n + 1);
+            cur.end = nxt ? nxt.start : cur.start + avg;
         }
         return ranges;
     }, [laps]);
@@ -497,11 +574,16 @@ export default function TrackMap({
     }
 
     const standings = useMemo((): Standing[] => {
+        // Resolve a usable timestamp for the current lap. lapRanges
+        // back-fills missing date_start values (e.g. lap 1) so this is
+        // always finite when we have any lap data.
+        const range = lapRanges.get(currentLap);
+        const lapTime = range ? range.start : NaN;
+        const haveLapTime = Number.isFinite(lapTime);
+
         // Positions: latest per driver at/before current lap time
         const driverPos = new Map<number, number>();
-        const currentLapData = laps.filter((l) => l.lap_number === currentLap);
-        if (currentLapData.length) {
-            const lapTime = new Date(currentLapData[0].date_start).getTime();
+        if (haveLapTime) {
             const latestPerDriver = new Map<number, Position>();
             for (const p of positions) {
                 const pTime = new Date(p.date).getTime();
@@ -521,8 +603,7 @@ export default function TrackMap({
         // Intervals: latest gap_to_leader and interval per driver at current lap
         const driverGap = new Map<number, number | null>();
         const driverInt = new Map<number, number | null>();
-        if (currentLapData.length) {
-            const lapTime = new Date(currentLapData[0].date_start).getTime();
+        if (haveLapTime) {
             for (const iv of intervals) {
                 const iTime = new Date(iv.date).getTime();
                 if (iTime <= lapTime + 120_000) {
@@ -578,9 +659,7 @@ export default function TrackMap({
         }
 
         // Current lap start time (used to check retirement timing)
-        const currentLapTime = currentLapData.length
-            ? new Date(currentLapData[0].date_start).getTime()
-            : 0;
+        const currentLapTime = haveLapTime ? lapTime : 0;
 
         // Build
         const result: Standing[] = [];
@@ -613,7 +692,16 @@ export default function TrackMap({
         }
         result.sort((a, b) => a.position - b.position);
         return result;
-    }, [positions, laps, stints, intervals, drivers, currentLap, retiredAt]);
+    }, [
+        positions,
+        laps,
+        stints,
+        intervals,
+        drivers,
+        currentLap,
+        retiredAt,
+        lapRanges,
+    ]);
 
     // ── Sync: rate + scrub only (animation drives lap changes, not the other way) ──
 
