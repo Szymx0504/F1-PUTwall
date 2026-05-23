@@ -3,6 +3,7 @@ import { NavLink, useSearchParams } from "react-router-dom";
 
 interface YTPlayer {
     destroy: () => void;
+    seekTo: (seconds: number, allowSeekAhead: boolean) => void;
 }
 
 declare global {
@@ -14,6 +15,7 @@ declare global {
                     videoId: string;
                     playerVars?: Record<string, number>;
                     events?: {
+                        onReady?: () => void;
                         onStateChange?: (event: { data: number }) => void;
                     };
                 },
@@ -73,6 +75,9 @@ export default function Navbar() {
             videoId: "ZtiQk-vqmBA",
             playerVars: { autoplay: 1, controls: 1, rel: 0 },
             events: {
+                onReady: () => {
+                    playerRef.current?.seekTo(3.45, true);
+                },
                 onStateChange: (event: { data: number }) => {
                     if (event.data === 0) {
                         handleClose();
