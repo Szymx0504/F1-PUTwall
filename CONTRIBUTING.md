@@ -1,4 +1,4 @@
-# Contributing to F1 Analyzer
+# Contributing to F1 PUTwall
 
 This project is proprietary software released under an All Rights Reserved license. While the repository is publicly visible for reference, **any modification, redistribution, or incorporation into other works requires prior written permission from the copyright holders**.
 
