@@ -13,6 +13,7 @@ import TrackMap from "../components/charts/TrackMap";
 import ReplayControls from "../components/replay/ReplayControls";
 import RaceSelector from "../components/shared/RaceSelector";
 import LoadingProgressBar from "../components/shared/LoadingProgressBar";
+import { deriveSafetyCarPeriods } from "../lib/safetyCar";
 
 export default function RaceReplay() {
     const selector = useRaceSelector("Race");
@@ -75,6 +76,16 @@ export default function RaceReplay() {
         ];
     }, [raceData, currentLap]);
 
+    // Safety car / VSC periods derived once from race control messages
+    const safetyCarPeriods = useMemo(() => {
+        if (!raceData) return [];
+        return deriveSafetyCarPeriods(
+            raceData.raceControl,
+            raceData.laps,
+            maxLap,
+        );
+    }, [raceData, maxLap]);
+
     // Unique driver list (deduplicated)
     const uniqueDrivers = useMemo(() => {
         if (!drivers) return [];
@@ -120,6 +131,7 @@ export default function RaceReplay() {
                         maxLap={maxLap}
                         focusedDrivers={focusedDrivers}
                         onFocusedDriversChange={setFocusedDrivers}
+                        safetyCarPeriods={safetyCarPeriods}
                     />
                     <RaceEventsFeed
                         laps={raceData.laps}
@@ -145,6 +157,7 @@ export default function RaceReplay() {
                             speed={speed}
                             isPlaying={isPlaying}
                             highlightDriver={selectedDriver}
+                            safetyCarPeriods={safetyCarPeriods}
                             onLapChange={handleLapChange}
                             onFinish={handleFinish}
                         />
@@ -158,6 +171,7 @@ export default function RaceReplay() {
                         maxLap={maxLap}
                         focusedDrivers={focusedDrivers}
                         onFocusedDriversChange={setFocusedDrivers}
+                        safetyCarPeriods={safetyCarPeriods}
                     />
                     <LapTimesChart
                         laps={raceData.laps}
@@ -167,6 +181,7 @@ export default function RaceReplay() {
                         maxLap={maxLap}
                         focusedDrivers={focusedDrivers}
                         onFocusedDriversChange={setFocusedDrivers}
+                        safetyCarPeriods={safetyCarPeriods}
                     />
                     <TireStrategy
                         stints={raceData.stints}

@@ -6,9 +6,11 @@ import {
     YAxis,
     CartesianGrid,
     Tooltip,
+    ReferenceArea,
     ResponsiveContainer,
 } from "recharts";
 import type { Lap, Driver, Position } from "../../types";
+import type { SafetyCarPeriod } from "../../lib/safetyCar";
 import {
     type ChartTooltipProps,
     type TooltipPayloadItem,
@@ -25,6 +27,7 @@ interface Props {
     maxLap: number;
     focusedDrivers?: Set<number>;
     onFocusedDriversChange?: (next: Set<number>) => void;
+    safetyCarPeriods?: SafetyCarPeriod[];
 }
 
 // ── Tooltip ───────────────────────────────────────────────────────────────────
@@ -146,6 +149,7 @@ export default function PositionChart({
     maxLap,
     focusedDrivers: controlledFocus,
     onFocusedDriversChange,
+    safetyCarPeriods = [],
 }: Props) {
     void maxLap;
 
@@ -390,6 +394,33 @@ export default function PositionChart({
                                 strokeDasharray="3 3"
                                 stroke="#2d3748"
                             />
+                            {safetyCarPeriods.map((p, i) => {
+                                if (p.startLap > currentLap) return null;
+                                const x2 = Math.min(p.endLap, currentLap);
+                                const isSC = p.kind === "SC";
+                                return (
+                                    <ReferenceArea
+                                        key={`sc-${i}`}
+                                        x1={p.startLap}
+                                        x2={x2}
+                                        y1={DOMAIN_MIN}
+                                        y2={DOMAIN_MAX}
+                                        fill={isSC ? "#ef4444" : "#eab308"}
+                                        fillOpacity={0.12}
+                                        stroke={isSC ? "#ef4444" : "#eab308"}
+                                        strokeOpacity={0.4}
+                                        strokeDasharray="4 4"
+                                        ifOverflow="hidden"
+                                        label={{
+                                            value: isSC ? "Safety Car" : "VSC",
+                                            position: "insideTop",
+                                            fill: isSC ? "#fca5a5" : "#fde68a",
+                                            fontSize: 10,
+                                            fontWeight: 600,
+                                        }}
+                                    />
+                                );
+                            })}
                             <XAxis
                                 dataKey="lap"
                                 stroke="#6b7280"
