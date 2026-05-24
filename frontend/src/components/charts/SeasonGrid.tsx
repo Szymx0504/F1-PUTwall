@@ -1,8 +1,10 @@
-import { useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
+import { useSeasonResultsStream } from "../../hooks/useSeasonResultsStream";
+import LoadingProgressBar from "../shared/LoadingProgressBar";
 
 interface Session {
     session_key: number;
-    session_name: string;
+    session_name?: string;
     session_type: string; // "Race" | "Sprint"
     country_name: string;
     circuit_short_name: string;
@@ -145,42 +147,6 @@ function cellLabel(slot: RaceSlot): string {
     return slot; // "DNF", "DNS", "DSQ", "NC"
 }
 
-type State =
-    | { status: "idle" }
-    | { status: "loading" }
-    | {
-          status: "done";
-          sessions: Session[];
-          results: Record<string, RaceResult[]>;
-      }
-    | { status: "error"; message: string };
-
-type Action =
-    | { type: "fetch_start" }
-    | {
-          type: "data";
-          sessions: Session[];
-          results: Record<string, RaceResult[]>;
-      }
-    | { type: "error"; message: string };
-
-function reducer(_state: State, action: Action): State {
-    switch (action.type) {
-        case "fetch_start":
-            return { status: "loading" };
-        case "data":
-            return {
-                status: "done",
-                sessions: action.sessions,
-                results: action.results,
-            };
-        case "error":
-            return { status: "error", message: action.message };
-        default:
-            return _state;
-    }
-}
-
 function getSurname(fullName?: string): string | null {
     if (!fullName) return null;
     const parts = fullName.trim().split(" ");
@@ -296,8 +262,7 @@ export default function SeasonGrid({
     apiBase = "/api",
     championshipPoints,
 }: SeasonGridProps) {
-    const [state, dispatch] = useReducer(reducer, { status: "idle" });
-    const abortRef = useRef<AbortController | null>(null);
+    const state = useSeasonResultsStream(year, apiBase);
     const [tooltip, setTooltip] = useState<TooltipState>({
         visible: false,
         x: 0,
@@ -306,44 +271,16 @@ export default function SeasonGrid({
     });
     const containerRef = useRef<HTMLDivElement | null>(null);
 
-    useEffect(() => {
-        if (!year) return;
-        abortRef.current?.abort();
-        const ctrl = new AbortController();
-        abortRef.current = ctrl;
-        dispatch({ type: "fetch_start" });
-
-        fetch(`${apiBase}/season/${year}/results`, { signal: ctrl.signal })
-            .then((r) => {
-                if (!r.ok) throw new Error(`HTTP ${r.status}`);
-                return r.json();
-            })
-            .then((json) => {
-                if (ctrl.signal.aborted) return;
-                dispatch({
-                    type: "data",
-                    sessions: json.sessions ?? [],
-                    results: json.results ?? {},
-                });
-            })
-            .catch((err) => {
-                if (err.name !== "AbortError")
-                    dispatch({ type: "error", message: err.message });
-            });
-
-        return () => ctrl.abort();
-    }, [year, apiBase]);
-
-    const visibleSessions = useMemo(() => {
-        if (state.status !== "done") return [];
+    const visibleSessions = useMemo<Session[]>(() => {
+        if (!state.sessions.length) return [];
         const idx = state.sessions.findIndex(
             (s) => s.session_key === selectedSessionKey,
         );
         return idx >= 0 ? state.sessions.slice(0, idx + 1) : state.sessions;
-    }, [state, selectedSessionKey]);
+    }, [state.sessions, selectedSessionKey]);
 
     const driverGrid = useMemo((): GridEntry[] => {
-        if (state.status !== "done") return [];
+        if (!visibleSessions.length) return [];
 
         const driverMap = new Map<number, GridEntry>();
 
@@ -393,27 +330,29 @@ export default function SeasonGrid({
         }
 
         return drivers.sort((a, b) => b.totalPoints - a.totalPoints);
-    }, [state, visibleSessions, championshipPoints]);
-
-    if (state.status === "idle" || state.status === "loading") {
-        return (
-            <div className="flex items-center gap-2 py-6 text-f1-muted text-sm">
-                <span className="animate-spin inline-block w-4 h-4 border-2 border-current border-t-transparent rounded-full" />
-                Loading season results…
-            </div>
-        );
-    }
+    }, [state.results, visibleSessions, championshipPoints]);
 
     if (state.status === "error") {
         return (
             <p className="text-red-400 text-sm py-4">
-                Failed to load season grid: {state.message}
+                Failed to load season grid: {state.error}
             </p>
         );
     }
 
-    if (!visibleSessions.length || !driverGrid.length) {
-        return <p className="text-f1-muted text-sm">No data available.</p>;
+    if (
+        state.status === "idle" ||
+        state.status === "loading" ||
+        !visibleSessions.length ||
+        !driverGrid.length
+    ) {
+        return (
+            <LoadingProgressBar
+                label="Loading season results"
+                loaded={state.loaded}
+                total={state.total}
+            />
+        );
     }
 
     return (

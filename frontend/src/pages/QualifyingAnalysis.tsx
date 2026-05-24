@@ -3,6 +3,7 @@ import { useState, useEffect, useMemo, useCallback } from "react";
 import { useSearchParams } from "react-router-dom";
 import { api } from "../lib/api";
 import { useApi } from "../hooks/useApi";
+import { useBestLapsTelemetryStream } from "../hooks/useBestLapsTelemetryStream";
 import type { Driver, Session } from "../types";
 import type { QSession, QualLap, QualStint, QualCarData } from "../lib/api";
 import QualifyingTable from "../components/charts/QualifyingTable";
@@ -11,6 +12,7 @@ import SpeedChart from "../components/charts/SpeedChart";
 import EngineChart from "../components/charts/EngineChart";
 import PedalChart from "../components/charts/PedalChart";
 import ErrorBoundary from "../components/ErrorBoundary";
+import LoadingProgressBar from "../components/shared/LoadingProgressBar";
 
 // One entry per race weekend — a single qualifying session_key covers all
 // three Q segments (we split them via race_control "Started" events, not
@@ -269,12 +271,6 @@ export default function QualifyingAnalysis() {
     }, [allLaps, segStart, segEnd, effectiveQSession]);
 
     // ── Car telemetry scoped to the active Q segment ──────────────────────
-    const [carDataMap, setCarDataMap] = useState<Map<number, QualCarData[]>>(
-        new Map(),
-    );
-    const [carDataLoading, setCarDataLoading] = useState(false);
-    const [carDataError, setCarDataError] = useState<string | null>(null);
-
     const uniqueDrivers = useMemo(
         () =>
             (drivers ?? []).filter(
@@ -286,48 +282,24 @@ export default function QualifyingAnalysis() {
         [drivers],
     );
 
-    // Re-fetch whenever session OR the active segment window changes.
-    // Uses the batch endpoint — one request instead of 20 parallel ones —
-    // so the backend can pace OpenF1 calls and avoid 429 rate limits.
-    useEffect(() => {
-        let cancelled = false;
-        setCarDataMap(new Map());
-        setCarDataError(null);
-        if (!selectedSessionKey || !uniqueDrivers.length) return;
-
-        setCarDataLoading(true);
-
-        const params = new URLSearchParams();
-        if (segStart) params.set("date_after", segStart);
-        if (segEnd) params.set("date_before", segEnd);
-        const qs = params.toString() ? `?${params}` : "";
-
-        fetch(`/api/sessions/${selectedSessionKey}/car_data/best_laps${qs}`)
-            .then(async (resp) => {
-                if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-                const json: Record<string, QualCarData[]> = await resp.json();
-                if (cancelled) return;
-                const map = new Map<number, QualCarData[]>();
-                for (const [dn, pts] of Object.entries(json)) {
-                    if (pts.length) map.set(Number(dn), pts);
-                }
-                setCarDataMap(map);
-                setCarDataLoading(false);
-                if (!map.size)
-                    setCarDataError("No telemetry returned for any driver.");
-            })
-            .catch((e) => {
-                if (cancelled) return;
-                console.warn("[CarData] batch fetch failed:", e);
-                setCarDataError(String(e));
-                setCarDataLoading(false);
-            });
-        // segStart/segEnd change whenever effectiveQSession changes, so this
-        // naturally re-fetches on Q tab switch.
-        return () => {
-            cancelled = true;
-        };
-    }, [selectedSessionKey, uniqueDrivers, segStart, segEnd]);
+    // Stream telemetry incrementally so we can show real load progress.
+    // segStart/segEnd change whenever effectiveQSession changes, so this
+    // naturally re-streams on Q tab switch.
+    const telemetry = useBestLapsTelemetryStream({
+        sessionKey: selectedSessionKey,
+        enabled: !!uniqueDrivers.length,
+        dateAfter: segStart,
+        dateBefore: segEnd,
+    });
+    const carDataMap = telemetry.carDataMap;
+    const carDataLoading =
+        telemetry.status === "idle" || telemetry.status === "loading";
+    const carDataError =
+        telemetry.status === "error"
+            ? (telemetry.error ?? "Failed to load telemetry.")
+            : telemetry.status === "done" && carDataMap.size === 0
+              ? "No telemetry returned for any driver."
+              : null;
 
     // Filter carDataMap to only include drivers present in the filtered laps.
     // This prevents telemetry from Q2-eliminated drivers leaking into the
@@ -605,24 +577,38 @@ export default function QualifyingAnalysis() {
                         </Card>
 
                         <Card title="Mini-Sector Fastest">
-                            <ErrorBoundary label="Mini-sector map">
-                                <MiniSectorMap
-                                    drivers={uniqueDrivers}
-                                    laps={laps}
-                                    carDataMap={filteredCarDataMap}
-                                    sessionKey={selectedSessionKey!}
-                                    focusDrivers={focusDrivers}
-                                    onFocusDrivers={setFocusDrivers}
+                            {carDataLoading ? (
+                                <LoadingProgressBar
+                                    label="Loading telemetry"
+                                    loaded={telemetry.loaded}
+                                    total={telemetry.total}
                                 />
-                            </ErrorBoundary>
+                            ) : carDataError ? (
+                                <p className="text-f1-muted text-sm">
+                                    {carDataError}
+                                </p>
+                            ) : (
+                                <ErrorBoundary label="Mini-sector map">
+                                    <MiniSectorMap
+                                        drivers={uniqueDrivers}
+                                        laps={laps}
+                                        carDataMap={filteredCarDataMap}
+                                        sessionKey={selectedSessionKey!}
+                                        focusDrivers={focusDrivers}
+                                        onFocusDrivers={setFocusDrivers}
+                                    />
+                                </ErrorBoundary>
+                            )}
                         </Card>
                     </div>
 
                     <Card title="Speed vs Distance — Best Laps">
                         {carDataLoading ? (
-                            <p className="text-f1-muted text-sm">
-                                Loading telemetry…
-                            </p>
+                            <LoadingProgressBar
+                                label="Loading telemetry"
+                                loaded={telemetry.loaded}
+                                total={telemetry.total}
+                            />
                         ) : carDataError ? (
                             <p className="text-f1-muted text-sm">
                                 {carDataError}
@@ -639,9 +625,11 @@ export default function QualifyingAnalysis() {
                     </Card>
                     <Card title="Engine — RPM (line) + Gear (stepped)">
                         {carDataLoading ? (
-                            <p className="text-f1-muted text-sm">
-                                Loading telemetry…
-                            </p>
+                            <LoadingProgressBar
+                                label="Loading telemetry"
+                                loaded={telemetry.loaded}
+                                total={telemetry.total}
+                            />
                         ) : carDataError ? (
                             <p className="text-f1-muted text-sm">
                                 {carDataError}
@@ -658,9 +646,11 @@ export default function QualifyingAnalysis() {
                     </Card>
                     <Card title="Pedal Trace — Throttle / Brake">
                         {carDataLoading ? (
-                            <p className="text-f1-muted text-sm">
-                                Loading telemetry…
-                            </p>
+                            <LoadingProgressBar
+                                label="Loading telemetry"
+                                loaded={telemetry.loaded}
+                                total={telemetry.total}
+                            />
                         ) : carDataError ? (
                             <p className="text-f1-muted text-sm">
                                 {carDataError}

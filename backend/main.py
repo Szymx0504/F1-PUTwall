@@ -6,7 +6,7 @@ Serves OpenF1 data via REST + WebSocket for race replay.
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, FileResponse
+from fastapi.responses import JSONResponse, FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 import asyncio
 import httpx
@@ -275,6 +275,113 @@ async def season_results(year: int):
     }
 
 
+# ─── Season Results (streaming NDJSON) ───────────────────────────────
+#
+# Same payload as /api/season/{year}/results but pushed incrementally so the
+# frontend can render a real progress bar. Each line is a JSON object:
+#
+#   {"type": "sessions", "sessions": [...], "total": N}
+#   {"type": "result", "session_key": K, "data": [...]}        (×N)
+#   {"type": "done"}
+#
+# The client should split the response body on "\n" and parse each non-empty
+# line. Progress = (#"result" events received) / total.
+
+@app.get("/api/season/{year}/results/stream")
+async def season_results_stream(year: int):
+    async def gen():
+        race_sessions: list[dict] = []
+        try:
+            result = await get_sessions(year=year, session_type="Race")
+            race_sessions = result or []
+        except Exception as e:
+            print(
+                f"[season_results_stream] Failed to fetch Race sessions for {year}: {e}")
+
+        all_sessions = sorted(
+            race_sessions,
+            key=lambda s: s.get("date_start", ""),
+        )
+
+        sessions_payload = [
+            {
+                "session_key": s["session_key"],
+                "session_name": s.get("session_name", "Race"),
+                "session_type": "Sprint" if s.get("session_name", "") == "Sprint" else s.get("session_type", "Race"),
+                "country_name": s.get("country_name", ""),
+                "circuit_short_name": s.get("circuit_short_name", ""),
+                "date_start": s.get("date_start", ""),
+                "year": s.get("year", year),
+            }
+            for s in all_sessions
+        ]
+
+        yield json.dumps({
+            "type": "sessions",
+            "sessions": sessions_payload,
+            "total": len(all_sessions),
+        }) + "\n"
+
+        if not all_sessions:
+            yield json.dumps({"type": "done"}) + "\n"
+            return
+
+        driver_cache: dict[int, dict] = {}
+
+        async def fetch_session(s: dict):
+            try:
+                result_data, drivers_data = await asyncio.gather(
+                    get_session_result(s["session_key"]),
+                    get_drivers(s["session_key"]),
+                )
+                return s["session_key"], result_data or [], drivers_data or []
+            except Exception:
+                return s["session_key"], [], []
+
+        CHUNK = 3
+        for i in range(0, len(all_sessions), CHUNK):
+            chunk = all_sessions[i: i + CHUNK]
+            chunk_results = await asyncio.gather(*(fetch_session(s) for s in chunk))
+            for sk, rows, drivers_list in chunk_results:
+                # Update cumulative driver metadata cache
+                for d in drivers_list:
+                    dn = d.get("driver_number")
+                    if dn and dn not in driver_cache:
+                        driver_cache[dn] = d
+                # Enrich result rows with driver metadata
+                enriched_rows = []
+                for row in rows:
+                    dn = row.get("driver_number")
+                    driver = driver_cache.get(dn, {})
+                    enriched_rows.append({
+                        **row,
+                        "full_name": row.get("full_name") or driver.get("full_name"),
+                        "name_acronym": row.get("name_acronym") or driver.get("name_acronym"),
+                        "broadcast_name": row.get("broadcast_name") or driver.get("broadcast_name"),
+                        "team_name": row.get("team_name") or driver.get("team_name"),
+                        "team_colour": row.get("team_colour") or driver.get("team_colour"),
+                    })
+                yield json.dumps({
+                    "type": "result",
+                    "session_key": sk,
+                    "data": enriched_rows,
+                }) + "\n"
+            if i + CHUNK < len(all_sessions):
+                await asyncio.sleep(0.5)
+
+        yield json.dumps({"type": "done"}) + "\n"
+
+    return StreamingResponse(
+        gen(),
+        media_type="application/x-ndjson",
+        headers={
+            # Disable proxy/CDN buffering so chunks reach the browser as emitted
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 # ─── Drivers ─────────────────────────────────────────────────────────
 
 @app.get("/api/sessions/{session_key}/drivers")
@@ -514,6 +621,87 @@ async def car_data_best_laps_batch(
     return result
 
 
+# ─── Car Data best-lap telemetry (streaming NDJSON) ──────────────────
+#
+# Stream variant of /car_data/best_laps used by the qualifying page to drive a
+# real progress bar. Lines:
+#   {"type": "init", "drivers": [dn, ...], "total": N}
+#   {"type": "result", "driver_number": dn, "data": [points...]}    (×N)
+#   {"type": "done"}
+
+@app.get("/api/sessions/{session_key}/car_data/best_laps/stream")
+async def car_data_best_laps_stream(
+    session_key: int,
+    date_after: str | None = Query(None, description="Q segment start (ISO)"),
+    date_before: str | None = Query(None, description="Q segment end (ISO)"),
+):
+    async def gen():
+        drivers_list, all_laps = await asyncio.gather(
+            get_drivers(session_key),
+            get_laps(session_key),
+        )
+        if not drivers_list or not all_laps:
+            yield json.dumps({"type": "init", "drivers": [], "total": 0}) + "\n"
+            yield json.dumps({"type": "done"}) + "\n"
+            return
+
+        driver_numbers = list({d["driver_number"] for d in drivers_list})
+
+        drivers_with_laps: list[int] = []
+        for dn in driver_numbers:
+            dn_laps = [l for l in all_laps if l.get("driver_number") == dn]
+            if date_after or date_before:
+                dn_laps = [
+                    l for l in dn_laps
+                    if (not date_after or (l.get("date_start") or "") >= date_after)
+                    and (not date_before or (l.get("date_start") or "") < date_before)
+                ]
+            if any(l.get("lap_duration") and not l.get("is_pit_out_lap") for l in dn_laps):
+                drivers_with_laps.append(dn)
+
+        yield json.dumps({
+            "type": "init",
+            "drivers": drivers_with_laps,
+            "total": len(drivers_with_laps),
+        }) + "\n"
+
+        BATCH = 3
+        for i in range(0, len(drivers_with_laps), BATCH):
+            batch = drivers_with_laps[i: i + BATCH]
+
+            async def _fetch_one(dn: int) -> tuple[int, list[dict]]:
+                try:
+                    return dn, await _best_lap_telemetry(
+                        session_key, dn, date_after, date_before, all_laps
+                    )
+                except Exception as exc:
+                    print(
+                        f"[best_laps_stream] driver {dn} failed: {exc}")
+                    return dn, []
+
+            batch_results = await asyncio.gather(*(_fetch_one(dn) for dn in batch))
+            for dn, data in batch_results:
+                yield json.dumps({
+                    "type": "result",
+                    "driver_number": dn,
+                    "data": data or [],
+                }) + "\n"
+
+            if i + BATCH < len(drivers_with_laps):
+                await asyncio.sleep(0.5)
+
+        yield json.dumps({"type": "done"}) + "\n"
+
+    return StreamingResponse(
+        gen(),
+        media_type="application/x-ndjson",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 async def _best_lap_telemetry(
     session_key: int,
     driver_number: int,
@@ -653,6 +841,88 @@ async def location(session_key: int, driver_number: int | None = None):
     return await get_location(session_key, driver_number)
 
 
+# ─── Track Map (streaming NDJSON) ────────────────────────────────────
+#
+# Same data as /track_map but split into chunks (outline + one chunk per
+# driver) so the frontend can render a real progress bar instead of a
+# rotating spinner. Lines:
+#   {"type": "init", "total": N}                       (N = 1 + driver count)
+#   {"type": "outline", "outline": [...], "_version": V}
+#   {"type": "driver", "driver_number": dn, "data": [...]}  (× drivers)
+#   {"type": "done"}
+
+@app.get("/api/sessions/{session_key}/track_map/stream")
+async def track_map_stream(
+    session_key: int,
+    refresh: bool = Query(
+        False, description="Force re-compute ignoring cache"),
+):
+    from openf1_client import get_processed_track_map, TRACK_MAP_VERSION
+
+    async def gen():
+        # ── Source the payload (cache hit or fresh compute) ──────────
+        data: dict | None = None
+        if not refresh:
+            try:
+                cached = await db.get_track_map(session_key)
+                if cached and cached.get("_version", 0) >= TRACK_MAP_VERSION:
+                    data = cached
+            except Exception as e:
+                print(f"[track_map_stream] cache lookup failed: {e}")
+
+        if data is None:
+            try:
+                data = await get_processed_track_map(session_key)
+            except Exception as e:
+                print(
+                    f"[track_map_stream] compute failed for {session_key}: {e}")
+                data = {"outline": [], "drivers": {}, "_version": TRACK_MAP_VERSION}
+
+            # Persist freshly-computed payload (best-effort).
+            try:
+                await db.insert_track_map(session_key, data)
+            except Exception as e:
+                print(f"[track_map_stream] cache write failed: {e}")
+
+        outline = data.get("outline") or []
+        drivers = data.get("drivers") or {}
+        version = data.get("_version", TRACK_MAP_VERSION)
+        driver_items = list(drivers.items())
+
+        # ── Stream chunks ────────────────────────────────────────────
+        # total = 1 outline chunk + 1 per driver
+        yield json.dumps({
+            "type": "init",
+            "total": 1 + len(driver_items),
+        }) + "\n"
+
+        yield json.dumps({
+            "type": "outline",
+            "outline": outline,
+            "_version": version,
+        }) + "\n"
+
+        for dn, pts in driver_items:
+            yield json.dumps({
+                "type": "driver",
+                "driver_number": int(dn) if str(dn).lstrip("-").isdigit() else dn,
+                "data": pts,
+            }) + "\n"
+            # Yield control between chunks so the browser sees each as it lands.
+            await asyncio.sleep(0)
+
+        yield json.dumps({"type": "done"}) + "\n"
+
+    return StreamingResponse(
+        gen(),
+        media_type="application/x-ndjson",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 @app.get("/api/sessions/{session_key}/track_map")
 async def track_map(
     session_key: int,
@@ -714,6 +984,64 @@ async def race_replay_data(session_key: int):
         "intervals": intervals or [],
         "raceControl": race_control_msgs or [],
     }
+
+
+# ─── Race Replay (streaming NDJSON) ──────────────────────────────────
+#
+# Same payload as /race_replay_data but emits each chunk as soon as the
+# underlying OpenF1 fetch resolves so the frontend can render a real progress
+# bar. Lines:
+#   {"type": "init", "parts": ["laps", ...], "total": 6}
+#   {"type": "part", "name": "laps", "data": [...]}                   (×6)
+#   {"type": "done"}
+
+@app.get("/api/sessions/{session_key}/race_replay_data/stream")
+async def race_replay_data_stream(session_key: int):
+    PARTS = [
+        ("laps", get_laps),
+        ("positions", get_position),
+        ("stints", get_stints),
+        ("weather", get_weather),
+        ("intervals", get_intervals),
+        ("raceControl", get_race_control),
+    ]
+
+    async def gen():
+        yield json.dumps({
+            "type": "init",
+            "parts": [name for name, _ in PARTS],
+            "total": len(PARTS),
+        }) + "\n"
+
+        async def fetch_part(name: str, fn) -> tuple[str, list]:
+            try:
+                data = await fn(session_key)
+                return name, (data or [])
+            except Exception as exc:
+                print(f"[race_replay_stream] {name} failed: {exc}")
+                return name, []
+
+        # Kick off all fetches concurrently, emit each as it resolves.
+        tasks = [asyncio.create_task(fetch_part(name, fn))
+                 for name, fn in PARTS]
+        for coro in asyncio.as_completed(tasks):
+            name, data = await coro
+            yield json.dumps({
+                "type": "part",
+                "name": name,
+                "data": data,
+            }) + "\n"
+
+        yield json.dumps({"type": "done"}) + "\n"
+
+    return StreamingResponse(
+        gen(),
+        media_type="application/x-ndjson",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 # ─── WebSocket: Race Replay ─────────────────────────────────────────

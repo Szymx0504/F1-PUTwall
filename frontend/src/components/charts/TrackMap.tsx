@@ -1,13 +1,7 @@
-import { useEffect, useRef, useState, useMemo } from "react";
-import { api } from "../../lib/api";
-import type {
-    Driver,
-    Interval,
-    Lap,
-    Position,
-    Stint,
-    TrackMapData,
-} from "../../types";
+import { useEffect, useRef, useMemo } from "react";
+import type { Driver, Interval, Lap, Position, Stint } from "../../types";
+import { useTrackMapStream } from "../../hooks/useTrackMapStream";
+import LoadingProgressBar from "../shared/LoadingProgressBar";
 
 interface Props {
     sessionKey: number;
@@ -295,9 +289,12 @@ export default function TrackMap({
     onFinish,
 }: Props) {
     const canvasRef = useRef<HTMLCanvasElement>(null);
-    const [trackData, setTrackData] = useState<TrackMapData | null>(null);
-    const [loading, setLoading] = useState(false);
-    const [error, setError] = useState<string | null>(null);
+    const stream = useTrackMapStream(sessionKey ?? null);
+    const trackData = stream.data;
+    const loading =
+        !!sessionKey &&
+        (stream.status === "idle" || stream.status === "loading");
+    const error = stream.status === "error" ? (stream.error ?? null) : null;
     const rafRef = useRef(0);
 
     // Accumulation-based timing
@@ -316,29 +313,6 @@ export default function TrackMap({
     speedRef.current = speed;
     onLapChangeRef.current = onLapChange;
     onFinishRef.current = onFinish;
-
-    // ── Fetch once per session ───────────────────────────────────────────────
-
-    useEffect(() => {
-        if (!sessionKey) return;
-        let cancelled = false;
-        setLoading(true);
-        setError(null);
-        setTrackData(null);
-        api.getTrackMap(sessionKey)
-            .then((d) => {
-                if (!cancelled) setTrackData(d);
-            })
-            .catch((e) => {
-                if (!cancelled) setError(e.message ?? "Failed to load");
-            })
-            .finally(() => {
-                if (!cancelled) setLoading(false);
-            });
-        return () => {
-            cancelled = true;
-        };
-    }, [sessionKey]);
 
     // ── Memos ─────────────────────────────────────────────────────────────────
 
@@ -863,13 +837,14 @@ export default function TrackMap({
             </h3>
             {loading ? (
                 <div
-                    className="flex items-center justify-center text-f1-muted"
+                    className="flex flex-col justify-center text-f1-muted"
                     style={{ height: H }}
                 >
-                    <div className="text-center">
-                        <div className="inline-block w-6 h-6 border-2 border-f1-border border-t-f1-red rounded-full animate-spin mb-2" />
-                        <p className="text-sm">Loading track data...</p>
-                    </div>
+                    <LoadingProgressBar
+                        label="Loading track data"
+                        loaded={stream.loaded}
+                        total={stream.total}
+                    />
                 </div>
             ) : error ? (
                 <div

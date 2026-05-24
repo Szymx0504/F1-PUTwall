@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useCallback } from "react";
 import { api } from "../lib/api";
 import { useApi } from "../hooks/useApi";
 import { useRaceSelector } from "../hooks/useRaceSelector";
-import type { FullRaceData } from "../types";
+import { useRaceReplayStream } from "../hooks/useRaceReplayStream";
 import PositionChart from "../components/charts/PositionChart";
 import LapTimesChart from "../components/charts/LapTimesChart";
 import GapChart from "../components/charts/GapChart";
@@ -12,6 +12,7 @@ import RaceEventsFeed from "../components/charts/RaceEventsFeed";
 import TrackMap from "../components/charts/TrackMap";
 import ReplayControls from "../components/replay/ReplayControls";
 import RaceSelector from "../components/shared/RaceSelector";
+import LoadingProgressBar from "../components/shared/LoadingProgressBar";
 
 export default function RaceReplay() {
     const selector = useRaceSelector("Race");
@@ -20,8 +21,6 @@ export default function RaceReplay() {
     const [currentLap, setCurrentLap] = useState(1);
     const [isPlaying, setIsPlaying] = useState(false);
     const [speed, setSpeed] = useState(1);
-    const [raceData, setRaceData] = useState<FullRaceData | null>(null);
-    const [loadingData, setLoadingData] = useState(false);
 
     // Fetch drivers for selected session
     const { data: drivers } = useApi(
@@ -29,33 +28,20 @@ export default function RaceReplay() {
         [sessionKey],
     );
 
-    // Fetch all data when session is selected
-    useEffect(() => {
-        if (!sessionKey) return;
-        let cancelled = false;
+    // Stream race replay data so we can render a real progress bar while it loads.
+    const replay = useRaceReplayStream(sessionKey);
+    const raceData = replay.data;
+    const loadingData =
+        !!sessionKey &&
+        (replay.status === "idle" || replay.status === "loading");
 
-        async function loadData() {
-            setLoadingData(true);
-            setRaceData(null);
-            try {
-                // Batch fetch all race replay data to avoid rate-limiting and improve speed
-                const data = await api.getRaceReplayData(sessionKey!);
-                if (!cancelled) {
-                    setRaceData(data);
-                    setCurrentLap(1);
-                    setIsPlaying(false);
-                }
-            } catch (err) {
-                console.error("Failed to load race data:", err);
-            } finally {
-                if (!cancelled) setLoadingData(false);
-            }
+    // Reset playback whenever a new race finishes streaming in.
+    useEffect(() => {
+        if (raceData) {
+            setCurrentLap(1);
+            setIsPlaying(false);
         }
-        loadData();
-        return () => {
-            cancelled = true;
-        };
-    }, [sessionKey]);
+    }, [raceData]);
 
     // Compute max lap
     const maxLap = useMemo(() => {
@@ -183,10 +169,13 @@ export default function RaceReplay() {
                     />
                 </div>
             ) : loadingData ? (
-                <div className="text-center text-f1-muted py-20">
-                    <div className="inline-block w-8 h-8 border-4 border-f1-border border-t-f1-red rounded-full animate-spin mb-4" />
-                    <p className="text-lg">Loading race data...</p>
-                    <p className="text-sm mt-1">
+                <div className="bg-f1-card rounded-xl border border-f1-border p-6">
+                    <LoadingProgressBar
+                        label="Loading race data"
+                        loaded={replay.loaded}
+                        total={replay.total}
+                    />
+                    <p className="text-f1-muted text-xs mt-2">
                         Fetching laps, positions, tires, weather & intervals
                     </p>
                 </div>

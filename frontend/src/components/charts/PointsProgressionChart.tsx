@@ -1,11 +1,4 @@
-import {
-    useEffect,
-    useMemo,
-    useReducer,
-    useRef,
-    useState,
-    useCallback,
-} from "react";
+import { useMemo, useState, useCallback } from "react";
 import {
     LineChart,
     Line,
@@ -15,6 +8,8 @@ import {
     Tooltip,
     ResponsiveContainer,
 } from "recharts";
+import { useSeasonResultsStream } from "../../hooks/useSeasonResultsStream";
+import LoadingProgressBar from "../shared/LoadingProgressBar";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -100,40 +95,6 @@ function getSurname(fullName?: string): string {
     if (!fullName) return "";
     const parts = fullName.trim().split(" ");
     return (parts[parts.length - 1] || fullName).toUpperCase();
-}
-
-// ── Data fetching reducer ─────────────────────────────────────────────────────
-
-type FetchState =
-    | { status: "idle" }
-    | { status: "loading" }
-    | {
-          status: "done";
-          sessions: Session[];
-          results: Record<string, RaceResult[]>;
-      }
-    | { status: "error"; message: string };
-
-type FetchAction =
-    | { type: "start" }
-    | {
-          type: "data";
-          sessions: Session[];
-          results: Record<string, RaceResult[]>;
-      }
-    | { type: "error"; message: string };
-
-function fetchReducer(_s: FetchState, a: FetchAction): FetchState {
-    switch (a.type) {
-        case "start":
-            return { status: "loading" };
-        case "data":
-            return { status: "done", sessions: a.sessions, results: a.results };
-        case "error":
-            return { status: "error", message: a.message };
-        default:
-            return _s;
-    }
 }
 
 // ── Tooltip ───────────────────────────────────────────────────────────────────
@@ -256,8 +217,7 @@ export default function PointsProgressionChart({
     selectedSession,
     apiBase = "/api",
 }: PointsProgressionChartProps) {
-    const [fetchState, dispatch] = useReducer(fetchReducer, { status: "idle" });
-    const abortRef = useRef<AbortController | null>(null);
+    const fetchState = useSeasonResultsStream(year, apiBase);
 
     // Multi-select focus (same pattern as PositionChart)
     const [focusedDrivers, setFocusedDrivers] = useState<Set<number>>(
@@ -275,52 +235,22 @@ export default function PointsProgressionChart({
     }, []);
     const clearFocus = useCallback(() => setFocusedDrivers(new Set()), []);
 
-    // ── Fetch ─────────────────────────────────────────────────────────────────
-
-    useEffect(() => {
-        if (!year) return;
-        abortRef.current?.abort();
-        const ctrl = new AbortController();
-        abortRef.current = ctrl;
-        dispatch({ type: "start" });
-
-        fetch(`${apiBase}/season/${year}/results`, { signal: ctrl.signal })
-            .then((r) => {
-                if (!r.ok) throw new Error(`HTTP ${r.status}`);
-                return r.json();
-            })
-            .then((json) => {
-                if (ctrl.signal.aborted) return;
-                dispatch({
-                    type: "data",
-                    sessions: json.sessions ?? [],
-                    results: json.results ?? {},
-                });
-            })
-            .catch((err) => {
-                if (err.name !== "AbortError")
-                    dispatch({ type: "error", message: err.message });
-            });
-
-        return () => ctrl.abort();
-    }, [year, apiBase]);
-
     // ── Visible sessions (up to selected) ─────────────────────────────────────
 
-    const visibleSessions = useMemo(() => {
-        if (fetchState.status !== "done") return [];
+    const visibleSessions = useMemo<Session[]>(() => {
+        if (!fetchState.sessions.length) return [];
         const idx = fetchState.sessions.findIndex(
             (s) => s.session_key === selectedSessionKey,
         );
         return idx >= 0
             ? fetchState.sessions.slice(0, idx + 1)
             : fetchState.sessions;
-    }, [fetchState, selectedSessionKey]);
+    }, [fetchState.sessions, selectedSessionKey]);
 
     // ── Driver metadata (determine primary/secondary per team) ────────────────
 
     const driverMetaMap = useMemo((): Map<string, DriverMeta> => {
-        if (fetchState.status !== "done") return new Map();
+        if (!visibleSessions.length) return new Map();
 
         // Collect all unique drivers from all visible races
         const byNumber = new Map<number, RaceResult & { _latest: boolean }>();
@@ -357,12 +287,12 @@ export default function PointsProgressionChart({
             });
         });
         return metaMap;
-    }, [fetchState, visibleSessions]);
+    }, [fetchState.results, visibleSessions]);
 
     // ── Build cumulative points chart data ────────────────────────────────────
 
     const chartData = useMemo(() => {
-        if (fetchState.status !== "done" || !visibleSessions.length) return [];
+        if (!visibleSessions.length) return [];
 
         // running totals per driver number
         const running = new Map<number, number>();
@@ -391,7 +321,7 @@ export default function PointsProgressionChart({
 
             return row;
         });
-    }, [fetchState, visibleSessions, driverMetaMap]);
+    }, [fetchState.results, visibleSessions, driverMetaMap]);
 
     // ── Max points (Y domain) ─────────────────────────────────────────────────
 
@@ -447,26 +377,26 @@ export default function PointsProgressionChart({
         </div>
     );
 
-    if (fetchState.status === "idle" || fetchState.status === "loading") {
-        return cardShell(
-            <div className="flex items-center gap-2 py-6 text-f1-muted text-sm">
-                <span className="animate-spin inline-block w-4 h-4 border-2 border-current border-t-transparent rounded-full" />
-                Loading points progression…
-            </div>,
-        );
-    }
-
     if (fetchState.status === "error") {
         return cardShell(
             <p className="text-red-400 text-sm py-4">
-                Failed to load data: {fetchState.message}
+                Failed to load data: {fetchState.error}
             </p>,
         );
     }
 
-    if (!chartData.length || !driverMetaMap.size) {
+    if (
+        fetchState.status === "idle" ||
+        fetchState.status === "loading" ||
+        !chartData.length ||
+        !driverMetaMap.size
+    ) {
         return cardShell(
-            <p className="text-f1-muted text-sm">No data available.</p>,
+            <LoadingProgressBar
+                label="Loading points progression"
+                loaded={fetchState.loaded}
+                total={fetchState.total}
+            />,
         );
     }
 
