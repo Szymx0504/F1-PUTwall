@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { memo, useMemo } from "react";
 import type {
     Driver,
     Lap,
@@ -63,7 +63,7 @@ const EVENT_COLORS: Record<EventType, string> = {
     chequered: "#f5f5f5",
 };
 
-export default function RaceEventsFeed({
+function RaceEventsFeed({
     laps,
     positions: _positions,
     stints: _stints,
@@ -329,3 +329,5 @@ export default function RaceEventsFeed({
         </div>
     );
 }
+
+export default memo(RaceEventsFeed);

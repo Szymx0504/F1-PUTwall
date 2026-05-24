@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { memo, useMemo } from "react";
 import type { Stint, Driver, Lap, Position } from "../../types";
 
 interface Props {
@@ -122,7 +122,7 @@ function sanitiseStints(
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
-export default function TireStrategy({
+function TireStrategy({
     stints,
     drivers,
     laps,
@@ -399,3 +399,5 @@ export default function TireStrategy({
         </div>
     );
 }
+
+export default memo(TireStrategy);

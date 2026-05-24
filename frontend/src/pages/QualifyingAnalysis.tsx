@@ -318,6 +318,17 @@ export default function QualifyingAnalysis() {
         return filtered;
     }, [carDataMap, laps]);
 
+    // Adapter so telemetry charts (which use Set<number>) can share the
+    // page-level focusDrivers selection with QualifyingTable & MiniSectorMap.
+    const focusedDriversSet = useMemo(
+        () => new Set(focusDrivers),
+        [focusDrivers],
+    );
+    const handleFocusedDriversSet = useCallback(
+        (next: Set<number>) => setFocusDrivers([...next]),
+        [],
+    );
+
     // focusDriverInfo removed — multi-driver focus handled in child components
     const cardTitle = hasSegments
         ? `${effectiveQSession} Results — ${currentRaceGroup?.label.split(" —")[0] ?? ""}`
@@ -619,6 +630,10 @@ export default function QualifyingAnalysis() {
                                     drivers={uniqueDrivers}
                                     laps={laps}
                                     carDataMap={filteredCarDataMap}
+                                    focusedDrivers={focusedDriversSet}
+                                    onFocusedDriversChange={
+                                        handleFocusedDriversSet
+                                    }
                                 />
                             </ErrorBoundary>
                         )}
@@ -640,6 +655,10 @@ export default function QualifyingAnalysis() {
                                     drivers={uniqueDrivers}
                                     laps={laps}
                                     carDataMap={filteredCarDataMap}
+                                    focusedDrivers={focusedDriversSet}
+                                    onFocusedDriversChange={
+                                        handleFocusedDriversSet
+                                    }
                                 />
                             </ErrorBoundary>
                         )}
@@ -661,6 +680,10 @@ export default function QualifyingAnalysis() {
                                     drivers={uniqueDrivers}
                                     laps={laps}
                                     carDataMap={filteredCarDataMap}
+                                    focusedDrivers={focusedDriversSet}
+                                    onFocusedDriversChange={
+                                        handleFocusedDriversSet
+                                    }
                                 />
                             </ErrorBoundary>
                         )}

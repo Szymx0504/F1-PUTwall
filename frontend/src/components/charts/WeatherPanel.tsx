@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { memo, useMemo } from "react";
 import { Thermometer, Droplets, Wind, CloudRain } from "lucide-react";
 import {
     Line,
@@ -53,12 +53,7 @@ function WeatherTooltip({
     );
 }
 
-export default function WeatherPanel({
-    weather,
-    allWeather,
-    currentLap,
-    maxLap,
-}: Props) {
+function WeatherPanel({ weather, allWeather, currentLap, maxLap }: Props) {
     // Progressive data: only show up to the current lap proportion
     const tempData = useMemo(() => {
         if (!allWeather.length || !maxLap)
@@ -212,3 +207,5 @@ export default function WeatherPanel({
         </div>
     );
 }
+
+export default memo(WeatherPanel);

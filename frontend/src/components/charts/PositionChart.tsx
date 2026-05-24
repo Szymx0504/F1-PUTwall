@@ -23,6 +23,8 @@ interface Props {
     highlightDriver: number | null; // kept for API compat, unused internally
     currentLap: number;
     maxLap: number;
+    focusedDrivers?: Set<number>;
+    onFocusedDriversChange?: (next: Set<number>) => void;
 }
 
 // ── Tooltip ───────────────────────────────────────────────────────────────────
@@ -142,25 +144,38 @@ export default function PositionChart({
     drivers,
     currentLap,
     maxLap,
+    focusedDrivers: controlledFocus,
+    onFocusedDriversChange,
 }: Props) {
     void maxLap;
 
-    // Multi-select focus state
-    const [focusedDrivers, setFocusedDrivers] = useState<Set<number>>(
-        new Set(),
-    );
+    // Multi-select focus state (controlled when prop provided)
+    const [internalFocus, setInternalFocus] = useState<Set<number>>(new Set());
+    const isControlled = controlledFocus !== undefined;
+    const focusedDrivers = isControlled ? controlledFocus : internalFocus;
     const hasFocus = focusedDrivers.size > 0;
 
-    const toggleDriver = useCallback((driverNumber: number) => {
-        setFocusedDrivers((prev) => {
-            const next = new Set(prev);
-            if (next.has(driverNumber)) next.delete(driverNumber);
-            else next.add(driverNumber);
-            return next;
-        });
-    }, []);
+    const toggleDriver = useCallback(
+        (driverNumber: number) => {
+            const apply = (prev: Set<number>) => {
+                const next = new Set(prev);
+                if (next.has(driverNumber)) next.delete(driverNumber);
+                else next.add(driverNumber);
+                return next;
+            };
+            if (isControlled) {
+                onFocusedDriversChange?.(apply(controlledFocus!));
+            } else {
+                setInternalFocus(apply);
+            }
+        },
+        [isControlled, controlledFocus, onFocusedDriversChange],
+    );
 
-    const clearFocus = useCallback(() => setFocusedDrivers(new Set()), []);
+    const clearFocus = useCallback(() => {
+        if (isControlled) onFocusedDriversChange?.(new Set());
+        else setInternalFocus(new Set());
+    }, [isControlled, onFocusedDriversChange]);
 
     // ── Build chart data ──────────────────────────────────────────────────────
 

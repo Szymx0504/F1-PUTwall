@@ -7,6 +7,8 @@ interface Props {
     drivers: Driver[];
     laps: QualLap[];
     carDataMap: Map<number, QualCarData[]>;
+    focusedDrivers?: Set<number>;
+    onFocusedDriversChange?: (next: Set<number>) => void;
 }
 
 /* ── Shared helpers ─────────────────────────────────────────────────── */
@@ -81,21 +83,35 @@ const W = 600,
 
 /* ── Component ──────────────────────────────────────────────────────── */
 
-export default function EngineChart({ drivers, laps, carDataMap }: Props) {
+export default function EngineChart({
+    drivers,
+    laps,
+    carDataMap,
+    focusedDrivers: controlledFocus,
+    onFocusedDriversChange,
+}: Props) {
     // Multi-select focus (same pattern as PositionChart)
-    const [focusedDrivers, setFocusedDrivers] = useState<Set<number>>(
-        new Set(),
-    );
+    const [internalFocus, setInternalFocus] = useState<Set<number>>(new Set());
+    const isControlled = controlledFocus !== undefined;
+    const focusedDrivers = isControlled ? controlledFocus : internalFocus;
     const hasFocus = focusedDrivers.size > 0;
-    const toggleDriver = useCallback((num: number) => {
-        setFocusedDrivers((prev) => {
-            const n = new Set(prev);
-            if (n.has(num)) n.delete(num);
-            else n.add(num);
-            return n;
-        });
-    }, []);
-    const clearFocus = useCallback(() => setFocusedDrivers(new Set()), []);
+    const toggleDriver = useCallback(
+        (num: number) => {
+            const apply = (prev: Set<number>) => {
+                const n = new Set(prev);
+                if (n.has(num)) n.delete(num);
+                else n.add(num);
+                return n;
+            };
+            if (isControlled) onFocusedDriversChange?.(apply(controlledFocus!));
+            else setInternalFocus(apply);
+        },
+        [isControlled, controlledFocus, onFocusedDriversChange],
+    );
+    const clearFocus = useCallback(() => {
+        if (isControlled) onFocusedDriversChange?.(new Set());
+        else setInternalFocus(new Set());
+    }, [isControlled, onFocusedDriversChange]);
 
     const svgRef = useRef<SVGSVGElement>(null);
     const [hoverDist, setHoverDist] = useState<number | null>(null);

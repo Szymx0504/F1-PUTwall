@@ -1,4 +1,4 @@
-import { useEffect, useRef, useMemo } from "react";
+import { memo, useEffect, useRef, useMemo } from "react";
 import type { Driver, Interval, Lap, Position, Stint } from "../../types";
 import { useTrackMapStream } from "../../hooks/useTrackMapStream";
 import LoadingProgressBar from "../shared/LoadingProgressBar";
@@ -273,7 +273,7 @@ function interpolateArc(samples: ArcSample[], time: number): number | null {
 
 // ── Component ────────────────────────────────────────────────────────────────
 
-export default function TrackMap({
+function TrackMap({
     sessionKey,
     drivers,
     laps,
@@ -995,3 +995,5 @@ export default function TrackMap({
         </div>
     );
 }
+
+export default memo(TrackMap);

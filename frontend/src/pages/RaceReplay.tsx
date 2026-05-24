@@ -21,6 +21,15 @@ export default function RaceReplay() {
     const [currentLap, setCurrentLap] = useState(1);
     const [isPlaying, setIsPlaying] = useState(false);
     const [speed, setSpeed] = useState(1);
+    // Shared focused-driver selection across PositionChart, GapChart, LapTimesChart
+    const [focusedDrivers, setFocusedDrivers] = useState<Set<number>>(
+        new Set(),
+    );
+
+    // Reset focus whenever a new session is selected
+    useEffect(() => {
+        setFocusedDrivers(new Set());
+    }, [sessionKey]);
 
     // Fetch drivers for selected session
     const { data: drivers } = useApi(
@@ -109,6 +118,8 @@ export default function RaceReplay() {
                         highlightDriver={selectedDriver}
                         currentLap={currentLap}
                         maxLap={maxLap}
+                        focusedDrivers={focusedDrivers}
+                        onFocusedDriversChange={setFocusedDrivers}
                     />
                     <RaceEventsFeed
                         laps={raceData.laps}
@@ -145,6 +156,8 @@ export default function RaceReplay() {
                         highlightDriver={selectedDriver}
                         currentLap={currentLap}
                         maxLap={maxLap}
+                        focusedDrivers={focusedDrivers}
+                        onFocusedDriversChange={setFocusedDrivers}
                     />
                     <LapTimesChart
                         laps={raceData.laps}
@@ -152,6 +165,8 @@ export default function RaceReplay() {
                         highlightDriver={selectedDriver}
                         currentLap={currentLap}
                         maxLap={maxLap}
+                        focusedDrivers={focusedDrivers}
+                        onFocusedDriversChange={setFocusedDrivers}
                     />
                     <TireStrategy
                         stints={raceData.stints}
