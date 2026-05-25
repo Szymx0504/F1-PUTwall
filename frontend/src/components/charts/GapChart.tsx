@@ -9,6 +9,7 @@ import {
     ResponsiveContainer,
 } from "recharts";
 import type { Interval, Lap, Driver } from "../../types";
+import { buildDriverColorResolver } from "../../lib/teamColors";
 import {
     type ChartTooltipProps,
     type TooltipPayloadItem,
@@ -244,6 +245,11 @@ export default function GapChart({
         [sortedDrivers],
     );
 
+    const colorOf = useMemo(
+        () => buildDriverColorResolver(drivers, focusedDrivers),
+        [drivers, focusedDrivers],
+    );
+
     return (
         <div className="bg-f1-card rounded-xl border border-f1-border p-4">
             <div className="flex items-center justify-between mb-3">
@@ -306,7 +312,7 @@ export default function GapChart({
                             }}
                         />
                         {drivers.map((driver) => {
-                            const color = `#${driver.team_colour || "ffffff"}`;
+                            const color = colorOf(driver.driver_number);
                             const style = getStyle(driver);
                             return (
                                 <Line
@@ -360,7 +366,7 @@ export default function GapChart({
                             </span>
                             {/* Driver buttons stacked vertically */}
                             {group.drivers.map((driver) => {
-                                const color = `#${driver.team_colour || "ffffff"}`;
+                                const color = colorOf(driver.driver_number);
                                 const focused = focusedDrivers.has(
                                     driver.driver_number,
                                 );
