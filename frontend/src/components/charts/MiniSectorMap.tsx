@@ -2,6 +2,7 @@ import { useMemo, useEffect, useState, useRef } from "react";
 import type { Driver, TrackMapData } from "../../types";
 import type { QualLap, QualCarData } from "../../lib/api";
 import { api, fmt, bestLapsByDriver } from "../../lib/api";
+import { teammateVariant } from "../../lib/teamColors";
 
 /* ── Constants ──────────────────────────────────────────────────────── */
 
@@ -12,40 +13,6 @@ const PAD = 30;
 const TRACK_STROKE = 6;
 
 /* ── Helpers ────────────────────────────────────────────────────────── */
-
-/** Convert hex to HSL components (h: 0–360, s: 0–100, l: 0–100) */
-function hexToHsl(hex: string): [number, number, number] {
-    const h = hex.replace("#", "");
-    const r = parseInt(h.slice(0, 2), 16) / 255;
-    const g = parseInt(h.slice(2, 4), 16) / 255;
-    const b = parseInt(h.slice(4, 6), 16) / 255;
-    const max = Math.max(r, g, b),
-        min = Math.min(r, g, b);
-    const l = (max + min) / 2;
-    if (max === min) return [0, 0, l * 100];
-    const d = max - min;
-    const s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
-    let hue = 0;
-    if (max === r) hue = ((g - b) / d + (g < b ? 6 : 0)) / 6;
-    else if (max === g) hue = ((b - r) / d + 2) / 6;
-    else hue = ((r - g) / d + 4) / 6;
-    return [hue * 360, s * 100, l * 100];
-}
-
-/**
- * Derive a perceptually distinct but team-authentic variant of a team colour
- * for the secondary teammate. Works entirely from the colour itself:
- * - If the base colour is dark (l < 45), the variant is lighter (+18L, +10S)
- * - If it's light/vivid (l ≥ 45), the variant is darker (−15L, +8S)
- * Same hue, clearly related, but distinguishable on a dark track background.
- */
-function teammateVariant(hex: string): string {
-    const [hue, sat, lit] = hexToHsl(hex);
-    const isDark = lit < 45;
-    const newL = isDark ? Math.min(lit + 32, 92) : Math.max(lit - 28, 12);
-    const newS = Math.min(sat + (isDark ? 18 : 15), 100);
-    return `hsl(${hue.toFixed(1)},${newS.toFixed(1)}%,${newL.toFixed(1)}%)`;
-}
 
 function computeDistances(data: QualCarData[]): number[] {
     if (!data.length) return [];

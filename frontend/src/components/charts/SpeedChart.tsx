@@ -2,6 +2,7 @@ import { useMemo, useState, useCallback, useRef } from "react";
 import type { Driver } from "../../types";
 import type { QualLap, QualCarData } from "../../lib/api";
 import { bestLapsByDriver } from "../../lib/api";
+import { buildDriverColorResolver } from "../../lib/teamColors";
 
 interface Props {
     drivers: Driver[];
@@ -119,20 +120,21 @@ export default function SpeedChart({
 
     const series = useMemo(() => {
         const best = bestLapsByDriver(laps);
+        const colorOf = buildDriverColorResolver(drivers, focusedDrivers);
         return [...best.keys()]
             .map((num) => {
                 const data = carDataMap.get(num) ?? [];
                 const driver = drivers.find((d) => d.driver_number === num);
                 return {
                     num,
-                    color: `#${driver?.team_colour ?? "888888"}`,
+                    color: colorOf(num),
                     name: driver?.name_acronym ?? String(num),
                     speeds: data.map((d) => d.speed),
                     distances: computeDistances(data),
                 };
             })
             .filter((s) => s.speeds.length > 1);
-    }, [laps, carDataMap, drivers]);
+    }, [laps, carDataMap, drivers, focusedDrivers]);
 
     const teamGroups = useMemo(
         () => buildTeamGroups(series, drivers),
