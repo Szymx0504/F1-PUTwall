@@ -2,6 +2,7 @@ import { memo, useEffect, useRef, useMemo } from "react";
 import type { Driver, Interval, Lap, Position, Stint } from "../../types";
 import { useTrackMapStream } from "../../hooks/useTrackMapStream";
 import LoadingProgressBar from "../shared/LoadingProgressBar";
+import type { SafetyCarPeriod } from "../../lib/safetyCar";
 
 interface Props {
     sessionKey: number;
@@ -15,6 +16,7 @@ interface Props {
     speed: number;
     isPlaying: boolean;
     highlightDriver: number | null;
+    safetyCarPeriods?: SafetyCarPeriod[];
     onLapChange: (lap: number) => void;
     onFinish: () => void;
 }
@@ -285,6 +287,7 @@ function TrackMap({
     isPlaying,
     highlightDriver,
     maxLap: _maxLap,
+    safetyCarPeriods = [],
     onLapChange,
     onFinish,
 }: Props) {
@@ -309,10 +312,12 @@ function TrackMap({
     const speedRef = useRef(speed);
     const onLapChangeRef = useRef(onLapChange);
     const onFinishRef = useRef(onFinish);
+    const scPeriodsRef = useRef<SafetyCarPeriod[]>([]);
     lapRef.current = currentLap;
     speedRef.current = speed;
     onLapChangeRef.current = onLapChange;
     onFinishRef.current = onFinish;
+    scPeriodsRef.current = safetyCarPeriods;
 
     // ── Memos ─────────────────────────────────────────────────────────────────
 
@@ -753,12 +758,18 @@ function TrackMap({
 
             // Track outline (if available)
             if (outlinePath) {
-                ctx!.strokeStyle = "#374151";
+                const scActive = scPeriodsRef.current.some(
+                    (p) =>
+                        p.kind === "SC" &&
+                        raceTime >= new Date(p.startDate).getTime() &&
+                        raceTime <= new Date(p.endDate).getTime(),
+                );
+                ctx!.strokeStyle = scActive ? "#7f1d1d" : "#374151";
                 ctx!.lineWidth = 6;
                 ctx!.lineCap = "round";
                 ctx!.lineJoin = "round";
                 ctx!.stroke(outlinePath);
-                ctx!.strokeStyle = "#4b5563";
+                ctx!.strokeStyle = scActive ? "#ef4444" : "#4b5563";
                 ctx!.lineWidth = 2;
                 ctx!.stroke(outlinePath);
             }
