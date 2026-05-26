@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import type { Driver } from "../../types";
 import type { QualLap, QualStint, QSession } from "../../lib/api";
 import { fmt, bestLapsByDriver, COMPOUND_COLOR } from "../../lib/api";
+import { buildDriverColorResolver } from "../../lib/teamColors";
 
 interface Props {
     drivers: Driver[];
@@ -84,6 +85,10 @@ export default function QualifyingTable({
     }
 
     const anyFocused = focusDrivers.length > 0;
+    const colorOf = useMemo(
+        () => buildDriverColorResolver(drivers, focusDrivers),
+        [drivers, focusDrivers],
+    );
 
     return (
         <div className="overflow-x-auto">
@@ -119,7 +124,7 @@ export default function QualifyingTable({
                 </thead>
                 <tbody>
                     {rows.map((r) => {
-                        const color = `#${r.driver?.team_colour ?? "888888"}`;
+                        const color = colorOf(r.driverNumber);
                         const focused = focusDrivers.includes(r.driverNumber);
                         const muted = anyFocused && !focused;
                         return (

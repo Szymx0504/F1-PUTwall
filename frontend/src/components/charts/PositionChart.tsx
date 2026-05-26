@@ -11,6 +11,7 @@ import {
 } from "recharts";
 import type { Lap, Driver, Position } from "../../types";
 import type { SafetyCarPeriod } from "../../lib/safetyCar";
+import { buildDriverColorResolver } from "../../lib/teamColors";
 import {
     type ChartTooltipProps,
     type TooltipPayloadItem,
@@ -291,6 +292,11 @@ export default function PositionChart({
         [sortedDrivers],
     );
 
+    const colorOf = useMemo(
+        () => buildDriverColorResolver(drivers, focusedDrivers),
+        [drivers, focusedDrivers],
+    );
+
     return (
         <div className="bg-f1-card rounded-xl border border-f1-border p-4">
             {/* Header */}
@@ -336,7 +342,7 @@ export default function PositionChart({
                                     top: y,
                                     transform: "translateY(-50%)",
                                     fontSize: 11,
-                                    color: `#${driver.team_colour || "ffffff"}`,
+                                    color: colorOf(driver.driver_number),
                                     opacity: style.opacity,
                                     transition: "opacity 0.2s",
                                     whiteSpace: "nowrap",
@@ -371,7 +377,7 @@ export default function PositionChart({
                                     top: y,
                                     transform: "translateY(-50%)",
                                     fontSize: 11,
-                                    color: `#${driver.team_colour || "ffffff"}`,
+                                    color: colorOf(driver.driver_number),
                                     opacity: style.opacity,
                                     transition: "opacity 0.2s",
                                     whiteSpace: "nowrap",
@@ -462,7 +468,7 @@ export default function PositionChart({
                                 }}
                             />
                             {drivers.map((driver) => {
-                                const color = `#${driver.team_colour || "ffffff"}`;
+                                const color = colorOf(driver.driver_number);
                                 const style = getStyle(driver);
                                 return (
                                     <Line
@@ -519,7 +525,7 @@ export default function PositionChart({
                             </span>
                             {/* Driver buttons stacked vertically */}
                             {group.drivers.map((driver) => {
-                                const color = `#${driver.team_colour || "ffffff"}`;
+                                const color = colorOf(driver.driver_number);
                                 const focused = focusedDrivers.has(
                                     driver.driver_number,
                                 );
